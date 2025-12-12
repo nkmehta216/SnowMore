@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Algo Trading Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 Algo Trading ML Dashboard</h1>
+            <p>Machine Learning + Scalping Strategy</p>
+        </header>
+
+        <main>
+            <section class="prediction-section">
+                <h2>Get Trading Signal</h2>
+                <div class="form-group">
+                    <label for="ticker">Ticker Symbol:</label>
+                    <input type="text" id="ticker" placeholder="e.g., AAPL" value="AAPL">
+                </div>
+                <button id="predict-btn" onclick="getPrediction()">Get Signal</button>
+                
+                <div id="result" class="result hidden">
+                    <h3>Trading Signal</h3>
+                    <div id="signal-display"></div>
+                </div>
+            </section>
+
+            <section class="models-section">
+                <h2>Available Models</h2>
+                <div id="models-list">Loading...</div>
+            </section>
+
+            <section class="stats-section">
+                <h2>System Status</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <h3>API Status</h3>
+                        <p id="api-status">Checking...</p>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Models Loaded</h3>
+                        <p id="models-count">0</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>&copy; 2025 Algo Trading Project</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
