@@ -27,8 +27,8 @@ def prepare_features(data: pd.DataFrame, target_column: str = 'target', test_siz
     Returns:
         X_train, X_test, y_train, y_test, scaler
     """
-    # Drop NaN values
-    df = data.dropna()
+    # Drop NaN values and ensure we have a writable copy to avoid SettingWithCopyWarning
+    df = data.dropna().copy()
     
     # Separate features and target
     if target_column not in df.columns:

@@ -115,5 +115,8 @@ if __name__ == "__main__":
     data = add_technical_indicators(data)
     data = add_price_features(data)
     data = create_lag_features(data, ['Close', 'Volume', 'RSI'], lags=3)
-    data.to_csv("data/indicators/AAPL_features.csv")
+    # Ensure output directory exists
+    out_dir = Path("data/indicators")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data.to_csv(out_dir / "AAPL_features.csv")
 

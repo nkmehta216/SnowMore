@@ -31,7 +31,13 @@ def update_ticker_data(ticker: str, data_dir: str = "data/raw") -> pd.DataFrame:
     
     # Load existing data
     existing_data = pd.read_csv(filepath, index_col=0, parse_dates=True)
+    # Ensure last_date is a proper Timestamp/datetime (some CSVs may have string indices)
     last_date = existing_data.index[-1]
+    try:
+        last_date = pd.to_datetime(last_date)
+    except Exception:
+        # Fallback: parse from string using datetime
+        last_date = datetime.strptime(str(last_date), "%Y-%m-%d")
     
     # Download new data
     today = datetime.now()

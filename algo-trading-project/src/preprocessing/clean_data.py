@@ -26,13 +26,21 @@ def clean_ohlcv_data(data: pd.DataFrame) -> pd.DataFrame:
     # Remove duplicates
     df = df[~df.index.duplicated(keep='first')]
     
+    # Coerce numeric columns to proper dtypes (handle strings, commas, etc.)
+    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
     # Handle missing values
     if df.isnull().sum().sum() > 0:
         logger.warning(f"Found {df.isnull().sum().sum()} missing values")
-        df = df.fillna(method='ffill').fillna(method='bfill')
+        # Use explicit forward/backward fill (fillna with 'method' is deprecated)
+        df = df.ffill().bfill()
     
     # Remove zero volume rows (non-trading days)
     if 'Volume' in df.columns:
+        # Ensure Volume is numeric and drop rows where it's not
+        df = df[df['Volume'].notna()]
         df = df[df['Volume'] > 0]
     
     # Check for price anomalies
@@ -73,5 +81,8 @@ if __name__ == "__main__":
     # Example usage
     data = pd.read_csv("data/raw/AAPL.csv", index_col=0, parse_dates=True)
     cleaned = clean_ohlcv_data(data)
-    cleaned.to_csv("data/processed/AAPL_cleaned.csv")
+    # Ensure output directory exists
+    out_dir = Path("data/processed")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cleaned.to_csv(out_dir / "AAPL_cleaned.csv")
 
