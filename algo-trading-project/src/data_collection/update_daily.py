@@ -1,70 +1,93 @@
 """
-Update stock data with latest daily prices.
+Update stock data with latest prices (daily, 1m, 5m).
 """
 import yfinance as yf
 import pandas as pd
 from pathlib import Path
 from datetime import datetime, timedelta
 import sys
+
 sys.path.append(str(Path(__file__).parent.parent))
 from utils.logger import get_logger
+from utils.config import DEFAULT_TICKERS
 
 logger = get_logger(__name__)
 
 
-def update_ticker_data(ticker: str, data_dir: str = "data/raw") -> pd.DataFrame:
+# Yahoo Finance interval limits
+INTERVAL_LIMITS = {
+    "1m": 7,     # days
+    "5m": 60,    # days
+    "1d": 3650   # ~10 years (safe)
+}
+
+
+def update_ticker_data(
+    ticker: str,
+    interval: str = "1d",
+    data_dir: str = "data/raw"
+) -> pd.DataFrame | None:
     """
     Update existing data file with latest prices.
-    
-    Args:
-        ticker: Stock ticker symbol
-        data_dir: Directory containing existing data files
-    
-    Returns:
-        Updated DataFrame
+    Supports 1m, 5m, and 1d intervals.
     """
-    filepath = Path(data_dir) / f"{ticker}.csv"
-    
+    suffix = f"_{interval}"
+    filepath = Path(data_dir) / f"{ticker}{suffix}.csv"
+
+    today = datetime.now()
+
+    # If file does not exist → fresh download (within allowed window)
     if not filepath.exists():
-        logger.warning(f"No existing data for {ticker}. Use download_data.py first.")
-        return None
-    
+        logger.info(f"No existing {interval} data for {ticker}. Creating fresh file.")
+        start_date = today - timedelta(days=INTERVAL_LIMITS[interval])
+        data = yf.download(
+            ticker,
+            start=start_date.strftime("%Y-%m-%d"),
+            interval=interval,
+            progress=False
+        )
+        if not data.empty:
+            data.to_csv(filepath)
+            logger.info(f"Saved {len(data)} rows for {ticker} ({interval})")
+        return data
+
     # Load existing data
     existing_data = pd.read_csv(filepath, index_col=0, parse_dates=True)
-    # Ensure last_date is a proper Timestamp/datetime (some CSVs may have string indices)
-    last_date = existing_data.index[-1]
-    try:
-        last_date = pd.to_datetime(last_date)
-    except Exception:
-        # Fallback: parse from string using datetime
-        last_date = datetime.strptime(str(last_date), "%Y-%m-%d")
-    
-    # Download new data
-    today = datetime.now()
-    if last_date.date() >= today.date():
-        logger.info(f"{ticker} is already up to date")
+    last_date = pd.to_datetime(existing_data.index[-1])
+
+    # Compute allowed start date
+    max_lookback = today - timedelta(days=INTERVAL_LIMITS[interval])
+    start_date = max(last_date + timedelta(minutes=1), max_lookback)
+
+    if start_date >= today:
+        logger.info(f"{ticker} ({interval}) is already up to date")
         return existing_data
-    
-    start_date = (last_date + timedelta(days=1)).strftime("%Y-%m-%d")
-    end_date = today.strftime("%Y-%m-%d")
-    
-    logger.info(f"Updating {ticker} from {start_date} to {end_date}")
-    new_data = yf.download(ticker, start=start_date, end=end_date)
-    
-    if len(new_data) > 0:
-        # Combine and save
+
+    logger.info(
+        f"Updating {ticker} ({interval}) from {start_date} to {today}"
+    )
+
+    new_data = yf.download(
+        ticker,
+        start=start_date.strftime("%Y-%m-%d"),
+        interval=interval,
+        progress=False
+    )
+
+    if not new_data.empty:
         updated_data = pd.concat([existing_data, new_data])
+        updated_data = updated_data[~updated_data.index.duplicated(keep="last")]
         updated_data.to_csv(filepath)
-        logger.info(f"Added {len(new_data)} new rows for {ticker}")
+        logger.info(f"Added {len(new_data)} new rows for {ticker} ({interval})")
         return updated_data
-    else:
-        logger.info(f"No new data available for {ticker}")
-        return existing_data
+
+    logger.info(f"No new data for {ticker} ({interval})")
+    return existing_data
 
 
 if __name__ == "__main__":
-    # Example: Update multiple tickers
-    tickers = ["AAPL", "MSFT", "GOOGL", "TSLA"]
-    for ticker in tickers:
-        update_ticker_data(ticker)
+    intervals = ["1d", "5m", "1m"]
 
+    for ticker in DEFAULT_TICKERS:
+        for interval in intervals:
+            update_ticker_data(ticker, interval)

@@ -1,88 +1,108 @@
 """
-Clean and preprocess stock data.
+Clean and preprocess OHLCV stock data.
 """
 import pandas as pd
 import numpy as np
 from pathlib import Path
-import sys
-sys.path.append(str(Path(__file__).parent.parent))
-from utils.logger import get_logger
+
+from src.utils.logger import get_logger
+from src.utils.config import (
+    DEFAULT_TICKERS,
+    RAW_DATA_DIR,
+    PROCESSED_DATA_DIR,
+)
 
 logger = get_logger(__name__)
 
 
 def clean_ohlcv_data(data: pd.DataFrame) -> pd.DataFrame:
     """
-    Clean OHLCV data by handling missing values and outliers.
-    
-    Args:
-        data: Raw OHLCV DataFrame
-    
-    Returns:
-        Cleaned DataFrame
+    Clean OHLCV data by handling duplicates, missing values, and anomalies.
     """
     df = data.copy()
-    
-    # Remove duplicates
-    df = df[~df.index.duplicated(keep='first')]
-    
-    # Coerce numeric columns to proper dtypes (handle strings, commas, etc.)
-    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+
+    # Ensure datetime index
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+
+    # Remove duplicate timestamps
+    df = df[~df.index.duplicated(keep="first")]
+
+    # Force numeric columns
+    price_cols = ["Open", "High", "Low", "Close", "Volume"]
+    for col in price_cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
     # Handle missing values
-    if df.isnull().sum().sum() > 0:
-        logger.warning(f"Found {df.isnull().sum().sum()} missing values")
-        # Use explicit forward/backward fill (fillna with 'method' is deprecated)
+    missing = df.isnull().sum().sum()
+    if missing > 0:
+        logger.warning(f"Found {missing} missing values — applying ffill/bfill")
         df = df.ffill().bfill()
-    
-    # Remove zero volume rows (non-trading days)
-    if 'Volume' in df.columns:
-        # Ensure Volume is numeric and drop rows where it's not
-        df = df[df['Volume'].notna()]
-        df = df[df['Volume'] > 0]
-    
-    # Check for price anomalies
-    for col in ['Open', 'High', 'Low', 'Close']:
+
+    # Remove non-trading rows
+    if "Volume" in df.columns:
+        df = df[df["Volume"] > 0]
+
+    # Remove extreme price anomalies (robust quantile filter)
+    for col in ["Open", "High", "Low", "Close"]:
         if col in df.columns:
-            q1 = df[col].quantile(0.01)
-            q99 = df[col].quantile(0.99)
-            df = df[(df[col] >= q1) & (df[col] <= q99)]
-    
-    logger.info(f"Cleaned data: {len(df)} rows remaining")
+            q_low, q_high = df[col].quantile([0.01, 0.99])
+            df = df[(df[col] >= q_low) & (df[col] <= q_high)]
+
+    logger.info(f"Cleaned OHLCV data → {len(df)} rows")
     return df
 
 
-def resample_data(data: pd.DataFrame, timeframe: str = "1H") -> pd.DataFrame:
+def resample_data(data: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     """
-    Resample data to different timeframe.
-    
-    Args:
-        data: OHLCV DataFrame
-        timeframe: Target timeframe (e.g., '5min', '1H', '1D')
-    
-    Returns:
-        Resampled DataFrame
+    Resample OHLCV data to a higher timeframe.
     """
-    resampled = data.resample(timeframe).agg({
-        'Open': 'first',
-        'High': 'max',
-        'Low': 'min',
-        'Close': 'last',
-        'Volume': 'sum'
-    }).dropna()
-    
-    logger.info(f"Resampled to {timeframe}: {len(resampled)} rows")
+    resampled = (
+        data.resample(timeframe)
+        .agg(
+            {
+                "Open": "first",
+                "High": "max",
+                "Low": "min",
+                "Close": "last",
+                "Volume": "sum",
+            }
+        )
+        .dropna()
+    )
+
+    logger.info(f"Resampled to {timeframe} → {len(resampled)} rows")
     return resampled
 
 
-if __name__ == "__main__":
-    # Example usage
-    data = pd.read_csv("data/raw/AAPL.csv", index_col=0, parse_dates=True)
-    cleaned = clean_ohlcv_data(data)
-    # Ensure output directory exists
-    out_dir = Path("data/processed")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    cleaned.to_csv(out_dir / "AAPL_cleaned.csv")
+def clean_all_tickers():
+    """
+    Clean raw OHLCV data for all configured tickers.
+    """
+    PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+    for ticker in DEFAULT_TICKERS:
+        logger.info(f" Cleaning data for {ticker}")
+
+        raw_path = RAW_DATA_DIR / f"{ticker}.csv"
+        if not raw_path.exists():
+            logger.warning(f"Raw data not found for {ticker}, skipping")
+            continue
+
+        data = pd.read_csv(
+            raw_path,
+            index_col=0,
+            parse_dates=True,
+        )
+
+        cleaned = clean_ohlcv_data(data)
+
+        output_path = PROCESSED_DATA_DIR / f"{ticker}_cleaned.csv"
+        cleaned.to_csv(output_path)
+
+        logger.info(f"Saved cleaned data → {output_path}")
+
+
+if __name__ == "__main__":
+    clean_all_tickers()
