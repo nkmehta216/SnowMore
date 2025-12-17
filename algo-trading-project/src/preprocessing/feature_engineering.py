@@ -5,6 +5,10 @@ import pandas as pd
 import numpy as np
 import pandas_ta as ta
 from pathlib import Path
+import sys
+
+# Make project root importable when running this script directly
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.utils.logger import get_logger
 from src.utils.config import (
