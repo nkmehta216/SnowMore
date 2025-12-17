@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent / 'src'))
 
-from api.main import app
+from src.api.main import app
 
 
 class TestAPI(unittest.TestCase):

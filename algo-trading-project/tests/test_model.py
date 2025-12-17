@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent / 'src'))
 
-from modeling.train_model import prepare_features, train_random_forest
+from src.modeling.train_model import prepare_features, train_random_forest
 
 
 class TestModel(unittest.TestCase):

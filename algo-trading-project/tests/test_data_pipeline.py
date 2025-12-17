@@ -6,9 +6,9 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent / 'src'))
 
-from data_collection.download_data import download_stock_data
-from preprocessing.clean_data import clean_ohlcv_data
-from preprocessing.feature_engineering import add_technical_indicators
+from src.data_collection.download_data import download_stock_data
+from src.preprocessing.clean_data import clean_ohlcv_data
+from src.preprocessing.feature_engineering import add_technical_indicators
 
 
 class TestDataPipeline(unittest.TestCase):
