@@ -12,7 +12,19 @@ from src.utils.config import (
     SIGNALS_DIR,
     RISK_PER_TRADE,
 )
-from src.utils import load_model, predict
+try:
+    from src.utils import load_model, predict
+except Exception:
+    # Provide safe fallbacks so the module can be imported in notebook contexts
+    def load_model(ticker: str):
+        """Fallback loader: raise FileNotFoundError to indicate missing model."""
+        raise FileNotFoundError(f"Model loader not available for {ticker}")
+
+    def predict(model, scaler, features, df: pd.DataFrame):
+        """Fallback predict: return zeros and None probabilities."""
+        preds = np.zeros(len(df), dtype=int)
+        probs = None
+        return preds, probs
 from src.strategy.scalping_logic import calculate_scalping_signals
 
 logger = get_logger(__name__)

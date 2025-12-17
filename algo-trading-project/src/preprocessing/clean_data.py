@@ -4,6 +4,11 @@ Clean and preprocess OHLCV stock data.
 import pandas as pd
 import numpy as np
 from pathlib import Path
+import sys
+
+# Make project root importable when running this script directly
+# (file is at src/preprocessing/clean_data.py -> parents[2] is project root)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.utils.logger import get_logger
 from src.utils.config import (
@@ -90,10 +95,29 @@ def clean_all_tickers():
             logger.warning(f"Raw data not found for {ticker}, skipping")
             continue
 
+        # Detect and skip possible extra meta header rows produced by some exporters
+        # (e.g. a 'Ticker' line and a 'Date' marker line) so the first data row is the
+        # actual date values and pandas can parse the index correctly.
+        skiprows = None
+        try:
+            with open(raw_path, "r", encoding="utf-8") as fh:
+                # read first few lines safely
+                head_lines = [next(fh) for _ in range(5)]
+        except Exception:
+            head_lines = []
+
+        if len(head_lines) >= 3:
+            line1 = head_lines[1].lstrip()
+            line2 = head_lines[2].lstrip()
+            if line1.startswith("Ticker") and line2.startswith("Date"):
+                skiprows = [1, 2]
+
         data = pd.read_csv(
             raw_path,
             index_col=0,
             parse_dates=True,
+            infer_datetime_format=True,
+            skiprows=skiprows,
         )
 
         cleaned = clean_ohlcv_data(data)

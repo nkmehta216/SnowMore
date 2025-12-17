@@ -25,7 +25,7 @@ INTERVAL_LIMITS = {
 def update_ticker_data(
     ticker: str,
     interval: str = "1d",
-    data_dir: str = "data/raw"
+    data_dir: str = "C:/Users/Nihar/Documents/GitHub/oop/SnowMore/algo-trading-project/data/raw"
 ) -> pd.DataFrame | None:
     """
     Update existing data file with latest prices.
@@ -47,6 +47,7 @@ def update_ticker_data(
             progress=False
         )
         if not data.empty:
+            filepath.parent.mkdir(parents=True, exist_ok=True)
             data.to_csv(filepath)
             logger.info(f"Saved {len(data)} rows for {ticker} ({interval})")
         return data
@@ -77,6 +78,7 @@ def update_ticker_data(
     if not new_data.empty:
         updated_data = pd.concat([existing_data, new_data])
         updated_data = updated_data[~updated_data.index.duplicated(keep="last")]
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         updated_data.to_csv(filepath)
         logger.info(f"Added {len(new_data)} new rows for {ticker} ({interval})")
         return updated_data
