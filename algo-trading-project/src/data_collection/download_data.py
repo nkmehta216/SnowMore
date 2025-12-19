@@ -45,7 +45,7 @@ def save_data(data: pd.DataFrame, ticker: str, output_dir: str = "data/raw"):
     """
     # Ensure we save to the project's raw data folder (absolute path)
     if output_dir == "data/raw":
-        output_dir = "C:/Users/Nihar/Documents/GitHub/oop/SnowMore/algo-trading-project/data/raw"
+        output_dir = Path(__file__).parent.parent.parent / "data" / "raw"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     filepath = Path(output_dir) / f"{ticker}.csv"
     data.to_csv(filepath)
