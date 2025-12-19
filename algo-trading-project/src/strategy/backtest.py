@@ -1,6 +1,9 @@
 """
 Backtest trading strategies.
+Entry: combined_signal
+Exit: trend-based (EMA filter)
 """
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -19,7 +22,8 @@ logger = get_logger(__name__)
 
 class SimpleBacktester:
     """
-    Simple long-only backtesting engine.
+    Long-only backtesting engine.
+    Entry via signals, exit via trend break.
     """
 
     def __init__(
@@ -38,77 +42,88 @@ class SimpleBacktester:
         self.trades = []
         self.equity_curve = []
 
-    def execute_trade(self, signal: int, price: float):
-        """
-        Execute trade based on signal.
-        """
-        # BUY
-        if signal == 1 and self.position == 0:
-            shares = int(self.capital / price)
-            if shares <= 0:
-                return
+    # --------------------------------------------------
+    # TRADE EXECUTION
+    # --------------------------------------------------
+    def buy(self, price: float):
+        shares = int(self.capital / price)
+        if shares <= 0:
+            return
 
-            cost = shares * price * (1 + self.commission)
-            self.capital -= cost
-            self.position = shares
-            self.entry_price = price
+        cost = shares * price * (1 + self.commission)
+        self.capital -= cost
+        self.position = shares
+        self.entry_price = price
 
-            self.trades.append(
-                {"type": "BUY", "price": price, "shares": shares}
-            )
+        self.trades.append(
+            {"type": "BUY", "price": price, "shares": shares}
+        )
 
-        # SELL
-        elif signal == -1 and self.position > 0:
-            proceeds = self.position * price * (1 - self.commission)
-            pnl = proceeds - (
-                self.position * self.entry_price * (1 + self.commission)
-            )
+    def sell(self, price: float):
+        proceeds = self.position * price * (1 - self.commission)
+        pnl = proceeds - (
+            self.position * self.entry_price * (1 + self.commission)
+        )
 
-            self.capital += proceeds
+        self.capital += proceeds
 
-            self.trades.append(
-                {
-                    "type": "SELL",
-                    "price": price,
-                    "shares": self.position,
-                    "pnl": pnl,
-                }
-            )
+        self.trades.append(
+            {
+                "type": "SELL",
+                "price": price,
+                "shares": self.position,
+                "pnl": pnl,
+            }
+        )
 
-            self.position = 0
-            self.entry_price = None
+        self.position = 0
+        self.entry_price = None
 
+    # --------------------------------------------------
+    # BACKTEST CORE
+    # --------------------------------------------------
     def backtest(
         self,
         data: pd.DataFrame,
         signal_column: str = "combined_signal",
+        trend_column: str = "EMA_50",
     ) -> dict:
         """
         Run backtest on historical data.
         """
         self.reset()
 
+        price_col = "Close" if "Close" in data.columns else "close"
+
         for date, row in data.iterrows():
+            price = row[price_col]
             signal = int(row.get(signal_column, 0))
-            price = row["Close"]
 
-            self.execute_trade(signal, price)
+            # -------- ENTRY --------
+            if signal == 1 and self.position == 0:
+                self.buy(price)
 
+            # -------- EXIT (trend-based) --------
+            if self.position > 0 and trend_column in row:
+                if price < row[trend_column]:
+                    self.sell(price)
+
+            # -------- EQUITY --------
             equity = self.capital + self.position * price
             self.equity_curve.append(
                 {"date": date, "equity": equity}
             )
 
-        # Close open position at end
+        # Force exit at end
         if self.position > 0:
-            self.execute_trade(-1, data.iloc[-1]["Close"])
+            self.sell(data.iloc[-1][price_col])
 
         return self.calculate_metrics()
 
+    # --------------------------------------------------
+    # METRICS
+    # --------------------------------------------------
     def calculate_metrics(self) -> dict:
-        """
-        Calculate performance metrics.
-        """
         equity_df = pd.DataFrame(self.equity_curve).set_index("date")
 
         returns = equity_df["equity"].pct_change().dropna()
@@ -144,6 +159,9 @@ class SimpleBacktester:
 
         return metrics
 
+    # --------------------------------------------------
+    # VISUALIZATION
+    # --------------------------------------------------
     def plot_equity_curve(self, save_path: Path | None = None):
         equity_df = pd.DataFrame(self.equity_curve)
 
@@ -168,10 +186,10 @@ class SimpleBacktester:
         plt.close()
 
 
+# --------------------------------------------------
+# MULTI-TICKER RUNNER
+# --------------------------------------------------
 def backtest_all_tickers():
-    """
-    Run backtests for all configured tickers.
-    """
     results = []
 
     for ticker in DEFAULT_TICKERS:
