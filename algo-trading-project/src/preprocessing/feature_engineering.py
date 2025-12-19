@@ -113,29 +113,33 @@ def generate_features_for_all_tickers():
     for ticker in DEFAULT_TICKERS:
         logger.info(f"⚙️ Feature engineering for {ticker}")
 
-        input_path = PROCESSED_DATA_DIR / f"{ticker}_cleaned.csv"
-        if not input_path.exists():
-            logger.warning(f"Missing cleaned data for {ticker}, skipping")
-            continue
+        # Process multiple intervals: 1d (no suffix), 5m (_5m), 1m (_1m)
+        intervals = [("1d", ""), ("5m", "_5m"), ("1m", "_1m")]
 
-        df = pd.read_csv(
-            input_path,
-            index_col=0,
-            parse_dates=True,
-        )
+        for interval_name, suffix in intervals:
+            input_path = PROCESSED_DATA_DIR / f"{ticker}{suffix}_cleaned.csv"
+            if not input_path.exists():
+                logger.warning(f"Missing cleaned data for {ticker}{suffix}, skipping {interval_name}")
+                continue
 
-        df = add_technical_indicators(df)
-        df = add_price_features(df)
-        df = create_lag_features(
-            df,
-            columns=["Close", "Volume", "RSI"],
-            lags=3,
-        )
+            df = pd.read_csv(
+                input_path,
+                index_col=0,
+                parse_dates=True,
+            )
 
-        output_path = INDICATORS_DIR / f"{ticker}_features.csv"
-        df.to_csv(output_path)
+            df = add_technical_indicators(df)
+            df = add_price_features(df)
+            df = create_lag_features(
+                df,
+                columns=["Close", "Volume", "RSI"],
+                lags=3,
+            )
 
-        logger.info(f"Saved features → {output_path}")
+            output_path = INDICATORS_DIR / f"{ticker}{suffix}_features.csv"
+            df.to_csv(output_path)
+
+            logger.info(f"Saved features → {output_path} ({interval_name})")
 
 
 if __name__ == "__main__":

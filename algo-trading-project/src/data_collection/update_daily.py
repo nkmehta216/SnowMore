@@ -9,7 +9,7 @@ import sys
 
 sys.path.append(str(Path(__file__).parent.parent))
 from utils.logger import get_logger
-from utils.config import DEFAULT_TICKERS
+from utils.config import DEFAULT_TICKERS, RAW_DATA_DIR
 
 logger = get_logger(__name__)
 
@@ -25,12 +25,15 @@ INTERVAL_LIMITS = {
 def update_ticker_data(
     ticker: str,
     interval: str = "1d",
-    data_dir: str = "C:/Users/Nihar/Documents/GitHub/oop/SnowMore/algo-trading-project/data/raw"
+    data_dir: str = None
 ) -> pd.DataFrame | None:
     """
     Update existing data file with latest prices.
     Supports 1m, 5m, and 1d intervals.
     """
+    if data_dir is None:
+        data_dir = str(RAW_DATA_DIR)
+    
     suffix = f"_{interval}"
     filepath = Path(data_dir) / f"{ticker}{suffix}.csv"
 
@@ -88,8 +91,12 @@ def update_ticker_data(
 
 
 if __name__ == "__main__":
+    # Update all intervals for all tickers
     intervals = ["1d", "5m", "1m"]
 
     for ticker in DEFAULT_TICKERS:
         for interval in intervals:
-            update_ticker_data(ticker, interval)
+            try:
+                update_ticker_data(ticker, interval)
+            except Exception as e:
+                logger.error(f"Failed to update {ticker} ({interval}): {e}")

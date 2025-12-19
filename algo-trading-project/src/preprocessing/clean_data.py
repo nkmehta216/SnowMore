@@ -90,42 +90,47 @@ def clean_all_tickers():
     for ticker in DEFAULT_TICKERS:
         logger.info(f" Cleaning data for {ticker}")
 
-        raw_path = RAW_DATA_DIR / f"{ticker}.csv"
-        if not raw_path.exists():
-            logger.warning(f"Raw data not found for {ticker}, skipping")
-            continue
+        # Process multiple intervals: 1d (no suffix), 5m (_5m), 1m (_1m)
+        intervals = [("1d", ""), ("5m", "_5m"), ("1m", "_1m")]
 
-        # Detect and skip possible extra meta header rows produced by some exporters
-        # (e.g. a 'Ticker' line and a 'Date' marker line) so the first data row is the
-        # actual date values and pandas can parse the index correctly.
-        skiprows = None
-        try:
-            with open(raw_path, "r", encoding="utf-8") as fh:
-                # read first few lines safely
-                head_lines = [next(fh) for _ in range(5)]
-        except Exception:
-            head_lines = []
+        for interval_name, suffix in intervals:
+            raw_path = RAW_DATA_DIR / f"{ticker}{suffix}.csv"
+            if not raw_path.exists():
+                logger.warning(f"Raw data not found for {ticker}{suffix}, skipping {interval_name}")
+                continue
 
-        if len(head_lines) >= 3:
-            line1 = head_lines[1].lstrip()
-            line2 = head_lines[2].lstrip()
-            if line1.startswith("Ticker") and line2.startswith("Date"):
-                skiprows = [1, 2]
+            # Detect and skip possible extra meta header rows produced by some exporters
+            skiprows = None
+            try:
+                with open(raw_path, "r", encoding="utf-8") as fh:
+                    head_lines = [next(fh) for _ in range(5)]
+            except Exception:
+                head_lines = []
 
-        data = pd.read_csv(
-            raw_path,
-            index_col=0,
-            parse_dates=True,
-            infer_datetime_format=True,
-            skiprows=skiprows,
-        )
+            if len(head_lines) >= 3:
+                line1 = head_lines[1].lstrip()
+                line2 = head_lines[2].lstrip()
+                if line1.startswith("Ticker") and line2.startswith("Date"):
+                    skiprows = [1, 2]
 
-        cleaned = clean_ohlcv_data(data)
+            try:
+                data = pd.read_csv(
+                    raw_path,
+                    index_col=0,
+                    parse_dates=True,
+                    infer_datetime_format=True,
+                    skiprows=skiprows,
+                )
+            except Exception as e:
+                logger.error(f"Failed to read {raw_path}: {e}")
+                continue
 
-        output_path = PROCESSED_DATA_DIR / f"{ticker}_cleaned.csv"
-        cleaned.to_csv(output_path)
+            cleaned = clean_ohlcv_data(data)
 
-        logger.info(f"Saved cleaned data → {output_path}")
+            output_path = PROCESSED_DATA_DIR / f"{ticker}{suffix}_cleaned.csv"
+            cleaned.to_csv(output_path)
+
+            logger.info(f"Saved cleaned data → {output_path} ({interval_name})")
 
 
 if __name__ == "__main__":
