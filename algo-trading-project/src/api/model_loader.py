@@ -24,7 +24,8 @@ class ModelCache:
         Args:
             models_dir: Directory containing saved models
         """
-        self.models_dir = Path(models_dir)
+        self.models_dir = Path(__file__).resolve().parents[2] / models_dir
+
         self.cache: Dict[str, Tuple[Any, Any, list]] = {}
     
     def load_model(self, ticker: str) -> Tuple[Any, Any, list]:
@@ -109,4 +110,12 @@ def get_model_cache(models_dir: str = "models") -> ModelCache:
         _model_cache = ModelCache(models_dir)
     
     return _model_cache
+def load_model(ticker: str):
+    """
+    Public helper to load a model for a ticker.
+    Used by strategy / backtest modules.
+    """
+    cache = get_model_cache()
+    return cache.load_model(ticker)
+
 
