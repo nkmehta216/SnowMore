@@ -1,5 +1,5 @@
 """
-Clean and preprocess OHLCV stock data.
+Clean and preprocess OHLCV stock data from Kaggle.
 """
 import pandas as pd
 import numpy as np
@@ -16,6 +16,7 @@ from src.utils.config import (
     RAW_DATA_DIR,
     PROCESSED_DATA_DIR,
 )
+from src.data_collection.load_kaggle_data import load_kaggle_data
 
 logger = get_logger(__name__)
 
@@ -45,17 +46,40 @@ def clean_ohlcv_data(data: pd.DataFrame) -> pd.DataFrame:
         logger.warning(f"Found {missing} missing values — applying ffill/bfill")
         df = df.ffill().bfill()
 
-    # Remove non-trading rows
+    # Remove non-trading rows (Volume > 0)
     if "Volume" in df.columns:
-        df = df[df["Volume"] > 0]
+        # Some Kaggle minute datasets use 0 for volume; only filter by volume
+        # when it's informative. If most rows have zero volume, skip this
+        # filter to avoid dropping all data.
+        initial_rows = len(df)
+        zero_frac = (df["Volume"] == 0).mean()
+        if zero_frac < 0.9:
+            df = df[df["Volume"] > 0]
+            removed = initial_rows - len(df)
+            if removed > 0:
+                logger.info(f"Removed {removed} zero-volume rows")
+        else:
+            logger.info("Volume column largely zero — skipping volume filter")
 
     # Remove extreme price anomalies (robust quantile filter)
     for col in ["Open", "High", "Low", "Close"]:
         if col in df.columns:
-            q_low, q_high = df[col].quantile([0.01, 0.99])
-            df = df[(df[col] >= q_low) & (df[col] <= q_high)]
+            # Skip quantile-based filtering if dataframe became empty
+            if df.empty:
+                break
 
-    logger.info(f"Cleaned OHLCV data → {len(df)} rows")
+            q_low, q_high = df[col].quantile([0.01, 0.99])
+            initial_rows = len(df)
+            df = df[(df[col] >= q_low) & (df[col] <= q_high)]
+            removed = initial_rows - len(df)
+            if removed > 0:
+                logger.info(f"Removed {removed} outliers from {col}")
+
+    if df.empty:
+        logger.warning("Dataframe empty after cleaning steps — returning empty DataFrame")
+        return df
+
+    logger.info(f"Cleaned OHLCV data → {len(df)} rows | {df.index[0]} to {df.index[-1]}")
     return df
 
 
@@ -81,56 +105,33 @@ def resample_data(data: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     return resampled
 
 
-def clean_all_tickers():
+def clean_all_tickers(raw_dir: Path = RAW_DATA_DIR, processed_dir: Path = PROCESSED_DATA_DIR):
     """
-    Clean raw OHLCV data for all configured tickers.
+    Clean raw OHLCV data for all configured tickers from Kaggle CSV files.
     """
-    PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    processed_dir.mkdir(parents=True, exist_ok=True)
 
     for ticker in DEFAULT_TICKERS:
-        logger.info(f" Cleaning data for {ticker}")
-
-        # Process multiple intervals: 1d (no suffix), 5m (_5m), 1m (_1m)
-        intervals = [("1d", ""), ("5m", "_5m"), ("1m", "_1m")]
-
-        for interval_name, suffix in intervals:
-            raw_path = RAW_DATA_DIR / f"{ticker}{suffix}.csv"
-            if not raw_path.exists():
-                logger.warning(f"Raw data not found for {ticker}{suffix}, skipping {interval_name}")
-                continue
-
-            # Detect and skip possible extra meta header rows produced by some exporters
-            skiprows = None
-            try:
-                with open(raw_path, "r", encoding="utf-8") as fh:
-                    head_lines = [next(fh) for _ in range(5)]
-            except Exception:
-                head_lines = []
-
-            if len(head_lines) >= 3:
-                line1 = head_lines[1].lstrip()
-                line2 = head_lines[2].lstrip()
-                if line1.startswith("Ticker") and line2.startswith("Date"):
-                    skiprows = [1, 2]
-
-            try:
-                data = pd.read_csv(
-                    raw_path,
-                    index_col=0,
-                    parse_dates=True,
-                    infer_datetime_format=True,
-                    skiprows=skiprows,
-                )
-            except Exception as e:
-                logger.error(f"Failed to read {raw_path}: {e}")
-                continue
-
+        logger.info(f"Cleaning data for {ticker}")
+        
+        try:
+            # Load raw Kaggle data
+            data = load_kaggle_data(ticker, raw_dir)
+            
+            # Clean the data
             cleaned = clean_ohlcv_data(data)
-
-            output_path = PROCESSED_DATA_DIR / f"{ticker}{suffix}_cleaned.csv"
-            cleaned.to_csv(output_path)
-
-            logger.info(f"Saved cleaned data → {output_path} ({interval_name})")
+            
+            # Save cleaned data (skip if empty)
+            if cleaned.empty:
+                logger.warning(f"Cleaned data for {ticker} is empty — skipping save")
+            else:
+                output_path = processed_dir / f"{ticker}_cleaned.csv"
+                cleaned.to_csv(output_path)
+                logger.info(f"Saved cleaned data → {output_path}")
+        
+        except Exception as e:
+            logger.error(f"Failed to clean {ticker}: {e}")
+            continue
 
 
 if __name__ == "__main__":
