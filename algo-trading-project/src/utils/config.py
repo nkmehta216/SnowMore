@@ -59,11 +59,18 @@ RSI_OVERBOUGHT = 70
 # ML PARAMETERS
 # ----------------------------
 ML_DEFAULT_WEIGHT = 0.6
+ML_WEIGHT_MIN = 0.4         # Minimum ML weight in ensemble
+ML_WEIGHT_MAX = 0.8         # Maximum ML weight in ensemble
 MIN_PROB_BUY = 0.55
 MAX_PROB_SELL = 0.45
 TEST_SIZE = 0.2             # For sklearn (fallback)
 RANDOM_STATE = 42
 N_ESTIMATORS = 100
+
+# ----------------------------
+# ENSEMBLE PARAMETERS
+# ----------------------------
+SIGNAL_FILTER_STRENGTH = 0.3  # Minimum signal strength for confirmation
 
 # ----------------------------
 # BACKTEST / EXECUTION
