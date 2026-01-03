@@ -1,0 +1,18 @@
+{
+  "capital": 1000000,
+  "peak_capital": 1000000,
+  "positions": [
+    {
+      "entry_price": 60174.75,
+      "entry_time": "2026-01-03 13:29:30.323100",
+      "qty": 6,
+      "entry_cost": 0.39999999999999997,
+      "entry_score": 0.20172702643137375
+    }
+  ],
+  "completed_trades": [],
+  "pnl": 0.0,
+  "start_time": "2026-01-03T13:29:30.320585",
+  "last_candle_time": "2026-01-03T13:30:56.877756",
+  "candles_processed": 17
+}
