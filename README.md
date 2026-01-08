@@ -12,23 +12,19 @@ A production‑ready **algorithmic trading bot** designed for **intraday & swing
 
 ##  Table of Contents
 
-1. Overview
-2. Features
-3. System Architecture
-4. Tech Stack & Libraries Used
-5. Installation & Setup
-6. How to Start the Bot
-7. Strategy Logic Explained
-8. Machine Learning Models
-9. Performance Metrics
-10. Operating Modes
-11. Customization Guide
-12. Risk Management
-13. Logging & Debugging
-14. Deployment Notes
-15. Contributing
-16. Roadmap
-17. Disclaimer
+- Overview
+- Features
+- System Architecture
+- Tech Stack & Libraries Used
+- Story behind ml model selection
+- Installation & Setup
+- How to Start the Bot
+- Strategy Logic Explained
+- Machine Learning Models
+- Performance Metrics
+- Operating Modes
+- Logging & Debugging
+- Disclaimer
 
 ---
 
@@ -199,45 +195,53 @@ ML output is **never used alone**, only as confirmation.
 
   ### FOR 1 YEAR BACKTESTING (ON KAGGLE DATA):
   
-    ============================================================
-🎯 BACKTEST RESULTS 
-============================================================
-Initial Capital:   ₹1,000,000
-Final Capital:     ₹1,151,022
-Total Return:      15.10%
-Net Profit:        ₹151,022
-Max Drawdown:      -2.63%
-Sharpe Ratio:      3.51
-Profit Factor:     1.17
-Win Rate:          49.18%
-Avg Win:           ₹742
-Avg Loss:          ₹-616
-Expectancy:        ₹52 per trade
-Total Trades:      2914
-Cost Per Trade:    0.0001% per side
-============================================================
+    ## 🎯 Backtest Results
 
-### PAPER TRADING ON 6 JANUARY 2026 :
-  
- CAPITAL SUMMARY:
-   Starting Capital:   ₹1,000,000
-   Ending Capital:     ₹1,000,344
-   Peak Capital:       ₹1,000,486
-   Net P&L:            ₹+344
+### 📈 1-Year Backtesting (Kaggle Data)
 
- PERFORMANCE METRICS:
-   Daily Return:       +0.034%
-   Max Drawdown:       -0.02%
-   Sharpe Ratio:       29.66
-   Profit Factor:      2.10
+**Initial Capital:** ₹1,000,000  
+**Final Capital:** ₹1,151,022  
+**Total Return:** **15.10%**  
+**Net Profit:** ₹151,022  
 
- TRADING STATISTICS:
-   Total Trades:       29
-   Winning Trades:     18 (62.1%)
-   Losing Trades:      11 (37.9%)
-   Average Win:        ₹36
-   Average Loss:       ₹28
-   Win/Loss Ratio:     1.28x
+**Max Drawdown:** -2.63%  
+**Sharpe Ratio:** 3.51  
+**Profit Factor:** 1.17  
+**Win Rate:** 49.18%  
+
+**Average Win:** ₹742  
+**Average Loss:** ₹-616  
+**Expectancy:** ₹52 per trade  
+**Total Trades:** 2,914  
+
+**Transaction Cost:** 0.0001% per side  
+
+---
+
+## 🧪 Paper Trading – 6 January 2026
+
+### 💰 Capital Summary
+
+- **Starting Capital:** ₹1,000,000  
+- **Ending Capital:** ₹1,000,344  
+- **Peak Capital:** ₹1,000,486  
+- **Net P&L:** **₹+344**
+
+### 📊 Performance Metrics
+
+- **Daily Return:** +0.034%  
+- **Max Drawdown:** -0.02%  
+- **Sharpe Ratio:** 29.66  
+- **Profit Factor:** 2.10  
+
+### 📉 Trading Statistics
+
+- **Total Trades:** 29  
+- **Winning Trades:** 18 (62.1%)  
+- **Losing Trades:** 11 (37.9%)  
+- **Average Win:** ₹36  
+- **Average Loss:** ₹28  
+- **Win/Loss Ratio:** 1.28x  
 
 
 
