@@ -3,9 +3,9 @@
 A production‑ready **algorithmic trading bot** designed for **intraday & swing trading** using a hybrid of **rule‑based technical strategies + machine learning models**. This project focuses on **robust backtesting, realistic paper trading, performance analytics, and extensibility**.
 
 # Team
- -Sunay Bhattacharjee
- -Nihar Mehta
- -Om Joshi
+ - Sunay Bhattacharjee
+ - Nihar Mehta
+ - Om Joshi
  
 ---
 
