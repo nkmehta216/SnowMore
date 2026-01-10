@@ -230,8 +230,7 @@ ML output is **never used alone**, only as confirmation.
 ### 📊 Performance Metrics
 
 - **Daily Return:** +0.034%  
-- **Max Drawdown:** -0.02%  
-- **Sharpe Ratio:** 29.66  
+- **Max Drawdown:** -0.02%   
 - **Profit Factor:** 2.10  
 
 ### 📉 Trading Statistics
