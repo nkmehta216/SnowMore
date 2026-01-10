@@ -209,13 +209,6 @@ ML output is **never used alone**, only as confirmation.
 **Profit Factor:** 1.17  
 **Win Rate:** 49.18%  
 
-**Average Win:** ₹742  
-**Average Loss:** ₹-616  
-**Expectancy:** ₹52 per trade  
-**Total Trades:** 2,914  
-
-**Transaction Cost:** 0.0001% per side  
-
 ---
 
 ## 🧪 Paper Trading – 6 January 2026
@@ -238,9 +231,7 @@ ML output is **never used alone**, only as confirmation.
 - **Total Trades:** 29  
 - **Winning Trades:** 18 (62.1%)  
 - **Losing Trades:** 11 (37.9%)  
-- **Average Win:** ₹36  
-- **Average Loss:** ₹28  
-- **Win/Loss Ratio:** 1.28x  
+
 
 
 
