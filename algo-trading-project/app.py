@@ -54,19 +54,71 @@ except ImportError as e:
     st.stop()
 
 # --------------------------------------------------
-# Styling
+# Styling & Custom CSS
 # --------------------------------------------------
 st.markdown("""
 <style>
+    /* Main styling */
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
+    /* Metric cards */
     .metric-card {
-        background-color: #f0f2f6;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
         padding: 20px;
         border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        font-weight: 500;
     }
+    
+    /* Headers */
     .header {
-        color: #1f77b4;
+        color: #667eea;
         font-weight: bold;
+        margin-bottom: 20px;
+        font-size: 24px;
+    }
+    
+    /* Success indicators */
+    .success-box {
+        background-color: #d4edda;
+        border-left: 4px solid #28a745;
+        padding: 12px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
+    
+    /* Warning indicators */
+    .warning-box {
+        background-color: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 12px;
+        border-radius: 5px;
+        margin: 10px 0;
+    }
+    
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
+    }
+    
+    /* Tab styling */
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: transparent;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        font-weight: 600;
+        color: #667eea;
+    }
+    
+    /* Divider */
+    hr {
+        margin: 20px 0;
+        border: 1px solid #e9ecef;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -271,30 +323,42 @@ def get_ensemble_probability(xgb_model, lgb_model, X_scaled):
 # Main App
 # --------------------------------------------------
 
-st.title("🎯 Combined ML + Scalping Strategy Dashboard")
-st.markdown("XGBoost + LightGBM Ensemble with Advanced Risk Management")
+# --------------------------------------------------
+# Main App Header
+# --------------------------------------------------
+
+st.markdown("""
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px; margin-bottom: 30px;">
+        <h1 style="color: white; margin: 0; font-size: 32px;">🎯 Combined ML + Scalping Strategy</h1>
+        <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">XGBoost + LightGBM Ensemble with Advanced Risk Management</p>
+    </div>
+""", unsafe_allow_html=True)
 
 # Sidebar
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.markdown("<h2 style='color: #667eea; text-align: center;'>⚙️ Configuration</h2>", unsafe_allow_html=True)
+    st.divider()
     
     selected_ticker = st.selectbox(
-        "Select Ticker",
+        "📊 Select Ticker",
         DEFAULT_TICKERS,
         help="Choose a stock ticker to analyze"
     )
     
-    view_mode = st.radio(
-        "View Mode",
-        ["Strategy Signals", "Model Performance", "Live Paper Trading"],
-        help="Choose analysis view"
-    )
+    st.info("💡 Tip: Switch tickers to compare different market segments", icon="ℹ️")
 
 # --------------------------------------------------
-# Main Tabs
+# Main Tabs with Enhanced Styling
 # --------------------------------------------------
 
-tab1, tab2, tab3, tab4 = st.tabs(["Overview", "ML Predictions", "Live Trading", "Daily Simulation"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📈 Overview", 
+    "🤖 ML Predictions", 
+    "📊 Live Trading", 
+    "📅 Daily Simulation"
+])
+
+st.divider()
 
 # --------------------------------------------------
 # Data Loading & Model Training
@@ -384,6 +448,7 @@ atr_values = test_df["atr"].values
 # --------------------------------------------------
 
 with tab1:
+    st.markdown("<h2 style='color: #667eea;'>📈 Market Overview & Strategy Status</h2>", unsafe_allow_html=True)
     st.header(f"Strategy Overview - {selected_ticker}")
     
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -394,21 +459,28 @@ with tab1:
     latest_signal = test_df['strategy_signal'].iloc[-1]
     latest_atr_pct = test_df['atr_pct'].iloc[-1]
     
+    st.subheader("📊 Real-Time Market Data")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
     with col1:
-        st.metric("Current Price", f"₹{latest_price:.2f}", f"{((prices[-1] - prices[-20])/prices[-20]*100):+.2f}%")
+        price_change = ((prices[-1] - prices[-20])/prices[-20]*100)
+        st.metric("💰 Price", f"₹{latest_price:.2f}", f"{price_change:+.2f}%", delta_color="normal")
     
     with col2:
-        st.metric("ML Probability", f"{latest_ml_prob*100:.1f}%", "Confidence")
+        st.metric("🤖 ML Conf", f"{latest_ml_prob*100:.1f}%", "Strong" if latest_ml_prob > 0.6 else "Weak")
     
     with col3:
-        st.metric("RSI (14)", f"{latest_rsi*100:.1f}", "Neutral" if 30 < latest_rsi*100 < 70 else "Extreme")
+        rsi_val = latest_rsi*100
+        rsi_status = "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral"
+        st.metric("📈 RSI", f"{rsi_val:.1f}", rsi_status)
     
     with col4:
         signal_text = "🟢 BUY" if latest_signal == 1 else "🔴 SELL" if latest_signal == -1 else "⚪ NEUTRAL"
-        st.metric("Signal", signal_text)
+        st.metric("📍 Signal", signal_text)
     
     with col5:
-        st.metric("ATR %", f"{latest_atr_pct*100:.3f}%", "Volatility")
+        st.metric("⚡ ATR %", f"{latest_atr_pct*100:.3f}%", "High Vol" if latest_atr_pct > 0.015 else "Low Vol")
     
     st.divider()
     
@@ -440,23 +512,25 @@ with tab1:
 # --------------------------------------------------
 
 with tab2:
-    st.header(f"ML Model Analysis - {selected_ticker}")
+    st.markdown("<h2 style='color: #667eea;'>🤖 ML Model Analysis & Insights</h2>", unsafe_allow_html=True)
     
     # ML Probability distribution
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("ML Probability Distribution")
+        st.subheader("📊 Probability Distribution")
         fig_prob_dist = px.histogram(
             x=ml_proba,
             nbins=50,
             title="Ensemble ML Probability Distribution",
-            labels={'x': 'Probability', 'y': 'Frequency'}
+            labels={'x': 'Probability', 'y': 'Frequency'},
+            color_discrete_sequence=['#667eea']
         )
+        fig_prob_dist.update_layout(showlegend=False, hovermode='x unified')
         st.plotly_chart(fig_prob_dist, use_container_width=True)
     
     with col2:
-        st.subheader("Statistics")
+        st.subheader("📈 Key Statistics")
         stats_data = {
             'Metric': ['Min', 'Q1', 'Median', 'Q3', 'Max', 'Mean', 'Std Dev'],
             'Value': [
@@ -509,12 +583,11 @@ with tab2:
 # --------------------------------------------------
 
 with tab3:
-    st.header(f"Live Paper Trading Dashboard - {selected_ticker}")
-    
-    st.info("📊 Simulating live trading with ML ensemble predictions and dynamic risk management")
+    st.markdown("<h2 style='color: #667eea;'>📊 Live Paper Trading Dashboard</h2>", unsafe_allow_html=True)
+    st.info("🔴 Real-time simulation with ML ensemble predictions and dynamic risk management", icon="ℹ️")
     
     # Recent signals
-    st.subheader("Recent Trading Signals (Last 20 Candles)")
+    st.subheader("📈 Recent Trading Signals (Last 20 Candles)")
     
     recent_df = pd.DataFrame({
         'Index': range(len(prices[-20:]))[-20:],
@@ -532,25 +605,27 @@ with tab3:
     
     st.divider()
     
-    # Current status
+    # Current status with improved styling
+    st.subheader("⚡ Real-Time Status Indicators")
     col_status1, col_status2, col_status3 = st.columns(3)
     
     with col_status1:
-        st.metric("Current ML Confidence", f"{ml_proba[-1]*100:.1f}%", 
-                 "Strong" if ml_proba[-1] > 0.6 else "Weak")
+        confidence = ml_proba[-1]*100
+        strength = "💪 Strong" if ml_proba[-1] > 0.6 else "⚠️ Weak"
+        st.metric("ML Confidence", f"{confidence:.1f}%", strength)
     
     with col_status2:
         signals_buy = (test_df['strategy_signal'] == 1).sum()
         signals_sell = (test_df['strategy_signal'] == -1).sum()
-        st.metric("Signal Distribution", f"🟢 {signals_buy} | 🔴 {signals_sell}")
+        st.metric("📊 BUY vs SELL", f"🟢 {signals_buy} | 🔴 {signals_sell}")
     
     with col_status3:
-        st.metric("Data Points", f"{len(test_df):,} candles")
+        st.metric("📉 Data Points", f"{len(test_df):,} candles")
 
 with tab4:
-    st.header("Daily Live Simulation - Trade by Trade")
+    st.markdown("<h2 style='color: #667eea;'>📅 Daily Live Simulation</h2>", unsafe_allow_html=True)
     
-    st.info("🔴 Select a date to simulate live trading for that specific day using real yfinance data")
+    st.info("🔴 Select a date to simulate live trading for that specific day using real yfinance data", icon="⏰")
     
     # Define trading cost
     COST_PER_TRADE = 0.000001
