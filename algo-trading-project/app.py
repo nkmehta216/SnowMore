@@ -141,6 +141,59 @@ def load_data(ticker):
         st.error(f"Error loading data for {ticker}: {e}")
         return None
 
+def fetch_today_realtime_data(ticker, days=1):
+    """Fetch today's real-time intraday data from yfinance"""
+    try:
+        IST = pytz.timezone("Asia/Kolkata")
+        
+        # Map ticker names to yfinance symbols
+        ticker_map = {
+            "NIFTY BANK": "^NSEBANK",
+            "NIFTY": "^NSEI",
+            "NIFTY COMMODITIES": "NIFTYCOMMDX.NS",
+            "NIFTY CONSUMPTION": "NIFTYCONSUMER.NS",
+            "NIFTY FIN SERVICE": "NIFTYFINANCE.NS",
+            "NIFTY INDIA MFG": "NIFTYMFG.NS",
+            "INDIA VIX": "^INDIAVIX"
+        }
+        
+        yf_ticker = ticker_map.get(ticker, ticker)
+        
+        # Fetch last N days of 1-minute data
+        end_date = datetime.now(IST)
+        start_date = end_date - timedelta(days=days)
+        
+        live_data = yf.download(
+            yf_ticker,
+            start=start_date,
+            end=end_date,
+            interval="1m",
+            progress=False
+        )
+        
+        if live_data.empty:
+            return None
+        
+        # Convert timezone to IST if needed
+        if live_data.index.tz is None:
+            live_data.index = live_data.index.tz_localize("UTC").tz_convert(IST)
+        else:
+            live_data.index = live_data.index.tz_convert(IST)
+        
+        # Handle MultiIndex columns from yfinance
+        if isinstance(live_data.columns, pd.MultiIndex):
+            live_data.columns = [col[0] for col in live_data.columns]
+        
+        # Standardize column names
+        live_data.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+        live_data = live_data[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+        
+        return live_data
+        
+    except Exception as e:
+        st.warning(f"Could not fetch real-time data for {ticker}: {e}")
+        return None
+
 def add_scalping_signals(data):
     """Add rule-based scalping signals using RSI, SMA, and MACD"""
     df = data.copy()
@@ -444,28 +497,77 @@ prices = test_df["Close"].values
 atr_values = test_df["atr"].values
 
 # --------------------------------------------------
+# FETCH TODAY'S REAL-TIME DATA FOR OVERVIEW
+# --------------------------------------------------
+with st.spinner("Fetching today's real-time market data..."):
+    today_realtime_data = fetch_today_realtime_data(selected_ticker, days=1)
+    
+    if today_realtime_data is not None and len(today_realtime_data) > 50:
+        # Process real-time data with features
+        today_with_signals = add_scalping_signals(today_realtime_data.copy())
+        today_with_basic = add_basic_features(today_with_signals.copy())
+        today_with_advanced = add_advanced_features(today_with_basic.copy())
+        today_with_advanced = today_with_advanced.dropna()
+        
+        if len(today_with_advanced) > 0:
+            # Get ML probabilities for today's data
+            X_today = today_with_advanced[strategy_data['feature_cols']].copy()
+            X_today_scaled = strategy_data['scaler'].transform(X_today)
+            today_ml_proba = get_ensemble_probability(
+                strategy_data['xgb_model'],
+                strategy_data['lgb_model'],
+                X_today_scaled
+            )
+            
+            # Use today's data for Overview
+            today_df = today_with_advanced.copy()
+            today_df['ml_prob'] = today_ml_proba
+            overview_prices = today_df["Close"].values
+            overview_atr_values = today_df["atr"].values
+            overview_df = today_df
+            is_realtime = True
+        else:
+            # Fallback to backtest data if today's data is too small
+            overview_prices = prices
+            overview_atr_values = atr_values
+            overview_df = test_df
+            is_realtime = False
+    else:
+        # Fallback to backtest data if can't fetch real-time
+        overview_prices = prices
+        overview_atr_values = atr_values
+        overview_df = test_df
+        is_realtime = False
+
+# --------------------------------------------------
 # TAB 1: Overview
 # --------------------------------------------------
 
 with tab1:
     st.markdown("<h2 style='color: #667eea;'>📈 Market Overview & Strategy Status</h2>", unsafe_allow_html=True)
+    
+    if is_realtime:
+        st.success("✅ Real-time Data Active (Today)")
+    else:
+        st.warning("⏱️ Using historical backtest data (2024)")
+    
     st.header(f"Strategy Overview - {selected_ticker}")
     
     col1, col2, col3, col4, col5 = st.columns(5)
     
-    latest_price = prices[-1]
-    latest_ml_prob = ml_proba[-1]
-    latest_rsi = test_df['RSI'].iloc[-1]
-    latest_signal = test_df['strategy_signal'].iloc[-1]
-    latest_atr_pct = test_df['atr_pct'].iloc[-1]
+    latest_price = overview_prices[-1]
+    latest_ml_prob = overview_df['ml_prob'].iloc[-1]
+    latest_rsi = overview_df['RSI'].iloc[-1]
+    latest_signal = overview_df['strategy_signal'].iloc[-1]
+    latest_atr_pct = overview_df['atr_pct'].iloc[-1]
     
     st.subheader("📊 Real-Time Market Data")
     
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        price_change = ((prices[-1] - prices[-20])/prices[-20]*100)
-        st.metric("💰 Price", f"₹{latest_price:.2f}", f"{price_change:+.2f}%", delta_color="normal")
+        price_change = ((overview_prices[-1] - overview_prices[-20])/overview_prices[-20]*100) if len(overview_prices) > 20 else 0
+        st.metric("💰 Price", f"₹{latest_price:,.2f}", f"{price_change:+.2f}%", delta_color="normal")
     
     with col2:
         st.metric("🤖 ML Conf", f"{latest_ml_prob*100:.1f}%", "Strong" if latest_ml_prob > 0.6 else "Weak")
@@ -501,7 +603,7 @@ with tab1:
         st.subheader("🎯 Trading Logic")
         st.info(f"""
         **Combined Strategy**
-        - ML Probability entry threshold: {np.percentile(ml_proba, 75):.2%}
+        - ML Probability entry threshold: {np.percentile(overview_df['ml_prob'].values, 75):.2%}
         - Dynamic ATR-based stops
         - Trailing stops with 3-tier profits
         - Multiple position management
@@ -520,7 +622,7 @@ with tab2:
     with col1:
         st.subheader("📊 Probability Distribution")
         fig_prob_dist = px.histogram(
-            x=ml_proba,
+            x=overview_df['ml_prob'].values,
             nbins=50,
             title="Ensemble ML Probability Distribution",
             labels={'x': 'Probability', 'y': 'Frequency'},
@@ -531,16 +633,17 @@ with tab2:
     
     with col2:
         st.subheader("📈 Key Statistics")
+        ml_probs_array = overview_df['ml_prob'].values
         stats_data = {
             'Metric': ['Min', 'Q1', 'Median', 'Q3', 'Max', 'Mean', 'Std Dev'],
             'Value': [
-                f"{ml_proba.min():.4f}",
-                f"{np.percentile(ml_proba, 25):.4f}",
-                f"{np.median(ml_proba):.4f}",
-                f"{np.percentile(ml_proba, 75):.4f}",
-                f"{ml_proba.max():.4f}",
-                f"{ml_proba.mean():.4f}",
-                f"{ml_proba.std():.4f}"
+                f"{ml_probs_array.min():.4f}",
+                f"{np.percentile(ml_probs_array, 25):.4f}",
+                f"{np.median(ml_probs_array):.4f}",
+                f"{np.percentile(ml_probs_array, 75):.4f}",
+                f"{ml_probs_array.max():.4f}",
+                f"{ml_probs_array.mean():.4f}",
+                f"{ml_probs_array.std():.4f}"
             ]
         }
         st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True)
@@ -590,12 +693,12 @@ with tab3:
     st.subheader("📈 Recent Trading Signals (Last 20 Candles)")
     
     recent_df = pd.DataFrame({
-        'Index': range(len(prices[-20:]))[-20:],
-        'Price': prices[-20:],
-        'ML Prob': ml_proba[-20:],
-        'RSI': test_df['RSI'].iloc[-20:].values * 100,
-        'ATR %': test_df['atr_pct'].iloc[-20:].values * 100,
-        'Signal': test_df['strategy_signal'].iloc[-20:].values
+        'Index': range(len(overview_prices[-20:]))[-20:],
+        'Price': overview_prices[-20:],
+        'ML Prob': overview_df['ml_prob'].iloc[-20:].values,
+        'RSI': overview_df['RSI'].iloc[-20:].values * 100,
+        'ATR %': overview_df['atr_pct'].iloc[-20:].values * 100,
+        'Signal': overview_df['strategy_signal'].iloc[-20:].values
     })
     
     recent_df['Signal'] = recent_df['Signal'].map({1: '🟢 BUY', -1: '🔴 SELL', 0: '⚪ NEUTRAL'})
@@ -610,17 +713,17 @@ with tab3:
     col_status1, col_status2, col_status3 = st.columns(3)
     
     with col_status1:
-        confidence = ml_proba[-1]*100
-        strength = "💪 Strong" if ml_proba[-1] > 0.6 else "⚠️ Weak"
+        confidence = overview_df['ml_prob'].iloc[-1] * 100
+        strength = "💪 Strong" if overview_df['ml_prob'].iloc[-1] > 0.6 else "⚠️ Weak"
         st.metric("ML Confidence", f"{confidence:.1f}%", strength)
     
     with col_status2:
-        signals_buy = (test_df['strategy_signal'] == 1).sum()
-        signals_sell = (test_df['strategy_signal'] == -1).sum()
+        signals_buy = (overview_df['strategy_signal'] == 1).sum()
+        signals_sell = (overview_df['strategy_signal'] == -1).sum()
         st.metric("📊 BUY vs SELL", f"🟢 {signals_buy} | 🔴 {signals_sell}")
     
     with col_status3:
-        st.metric("📉 Data Points", f"{len(test_df):,} candles")
+        st.metric("📉 Data Points", f"{len(overview_df):,} candles")
 
 with tab4:
     st.markdown("<h2 style='color: #667eea;'>📅 Daily Live Simulation</h2>", unsafe_allow_html=True)
