@@ -1241,6 +1241,257 @@ with tab4:
             
             summary_text = "\n".join(sim_logs_summary)
             st.markdown(f"```\n{summary_text}\n```")
+    
+    # ------ 7-DAY SIMULATION SECTION ------
+    st.divider()
+    st.markdown("### 📈 7-Day Paper Trading Simulation")
+    st.info("📈 Run a 7-day backtest simulation using the last 7 days of NIFTY BANK data from yfinance", icon="📊")
+    
+    col_7d_1, col_7d_2 = st.columns([2, 3])
+    with col_7d_1:
+        st.metric("Period", "Last 7 Days")
+    with col_7d_2:
+        end_7d = datetime.now(IST).date()
+        start_7d = end_7d - timedelta(days=7)
+        st.metric("Date Range", f"{start_7d.strftime('%Y-%m-%d')} to {end_7d.strftime('%Y-%m-%d')}")
+    
+    if st.button("📈 Run 7-Day Simulation", key="run_7day_sim"):
+        with st.spinner("Fetching 7 days of NIFTY BANK data from yfinance..."):
+            try:
+                end_dt = datetime.now(IST)
+                start_dt = end_dt - timedelta(days=7)
+                
+                try:
+                    data_7d = yf.download("^NSEBANK", start=start_dt, end=end_dt, interval="1m", progress=False)
+                except:
+                    data_7d = yf.download("NIFTYBANK.NS", start=start_dt, end=end_dt, interval="1m", progress=False)
+                
+                # Fix timezone
+                if data_7d.index.tz is None:
+                    data_7d.index = data_7d.index.tz_localize("UTC").tz_convert(IST)
+                else:
+                    data_7d.index = data_7d.index.tz_convert(IST)
+                
+                # Fix columns
+                if isinstance(data_7d.columns, pd.MultiIndex):
+                    data_7d.columns = [col[0] for col in data_7d.columns]
+                
+                data_7d.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                data_7d = data_7d[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+                
+                if len(data_7d) == 0:
+                    st.warning("⚠️ No data available for last 7 days.")
+                    st.stop()
+                
+                st.success(f"✅ Fetched {len(data_7d)} candles from {data_7d.index[0].strftime('%Y-%m-%d %H:%M')} to {data_7d.index[-1].strftime('%Y-%m-%d %H:%M')}")
+                
+            except Exception as e:
+                st.error(f"❌ Error fetching data: {e}")
+                st.stop()
+        
+        with st.spinner("Processing features..."):
+            try:
+                data_7d_signals = add_scalping_signals(data_7d.copy())
+                data_7d_features = add_basic_features(data_7d_signals.copy())
+                data_7d_adv = add_advanced_features(data_7d_features.copy())
+                data_7d_adv = data_7d_adv.dropna()
+                
+                X_7d = data_7d_adv[strategy_data['feature_cols']].copy()
+                X_7d_scaled = strategy_data['scaler'].transform(X_7d)
+                ml_prob_7d = get_ensemble_probability(
+                    strategy_data['xgb_model'],
+                    strategy_data['lgb_model'],
+                    X_7d_scaled
+                )
+                
+                prices_7d = data_7d_adv["Close"].values
+                atr_7d = data_7d_adv["atr"].values
+                
+                st.success(f"✅ Features applied: {len(data_7d_adv)} candles processed")
+                
+            except Exception as e:
+                st.error(f"❌ Error in feature engineering: {e}")
+                st.stop()
+        
+        with st.spinner("Running 7-day trading simulation..."):
+            # Parameters
+            ENTRY_THRESHOLD_7D = np.percentile(ml_prob_7d, 75)
+            STOP_LOSS_7D = 0.015
+            TP1_7D = 0.004
+            TP2_7D = 0.008
+            TP3_7D = 0.015
+            TRAIL_7D = 0.003
+            HORIZON_7D = 20
+            MIN_POS_7D = 0.15
+            MAX_POS_7D = 0.50
+            
+            cap_7d = INITIAL_CAPITAL
+            peak_7d = cap_7d
+            pos_7d = []
+            trades_7d = []
+            equity_7d = [cap_7d]
+            logs_7d = []
+            
+            logs_7d.append("=" * 80)
+            logs_7d.append(" LIVE PAPER TRADING - LAST 7 DAYS")
+            logs_7d.append("=" * 80)
+            logs_7d.append(f"\n Fetched {len(data_7d)} candles")
+            logs_7d.append(f"   Time Range: {data_7d.index[0]} to {data_7d.index[-1]}")
+            logs_7d.append(f"   Price Range: ₹{data_7d['Low'].min():.2f} - ₹{data_7d['High'].max():.2f}")
+            logs_7d.append(f"\n ML Probability range: {ml_prob_7d.min():.4f} to {ml_prob_7d.max():.4f}")
+            logs_7d.append(f"   Mean confidence: {ml_prob_7d.mean():.4f}")
+            logs_7d.append(f"   Data points: {len(data_7d_adv)} candles")
+            logs_7d.append("")
+            
+            # Simulation loop
+            for i in range(len(prices_7d)):
+                price = prices_7d[i]
+                tm = data_7d_adv.index[i]
+                prob = ml_prob_7d[i]
+                atr = atr_7d[i]
+                
+                if i < 20:
+                    equity_7d.append(cap_7d)
+                    continue
+                
+                # Process exits
+                to_close = []
+                for pidx, p in enumerate(pos_7d):
+                    pm = (price - p['ep']) / p['ep']
+                    vstop = STOP_LOSS_7D * (1 + (atr / price) * 0.3)
+                    vstop = np.clip(vstop, STOP_LOSS_7D * 0.8, STOP_LOSS_7D * 1.2)
+                    
+                    exit_flag = False
+                    reason = None
+                    xp = price
+                    
+                    if pm >= TP1_7D:
+                        exit_flag, reason, xp = True, "QUICK_PROFIT", p['ep'] * (1 + TP1_7D)
+                    elif pm >= TP2_7D:
+                        exit_flag, reason, xp = True, "MEDIUM_PROFIT", p['ep'] * (1 + TP2_7D)
+                    elif pm >= TP3_7D:
+                        exit_flag, reason, xp = True, "BIG_PROFIT", p['ep'] * (1 + TP3_7D)
+                    elif pm > TP1_7D and price < p['mp'] * (1 - TRAIL_7D):
+                        exit_flag, reason, xp = True, "TRAIL", p['mp'] * (1 - TRAIL_7D)
+                    elif pm <= -vstop:
+                        exit_flag, reason, xp = True, "STOP", price
+                    elif i - p['ei'] >= HORIZON_7D:
+                        exit_flag, reason, xp = True, "TIME", price
+                    
+                    if exit_flag:
+                        ret = (xp - p['ep']) / p['ep']
+                        nret = ret - (COST_PER_TRADE * 2)
+                        pnl = p['pv'] * nret
+                        cap_7d += pnl
+                        peak_7d = max(peak_7d, cap_7d)
+                        
+                        emoji = "🎯" if pnl > 0 else "🛑"
+                        logs_7d.append(f"{emoji} EXIT | {tm.strftime('%Y-%m-%d %H:%M:%S')} | ₹{xp:,.2f} | PL: {pnl:+,.0f} ({nret*100:+.2f}%) | [{reason}]")
+                        
+                        trades_7d.append({'ep': p['ep'], 'xp': xp, 'ret': nret, 'pnl': pnl, 'rsn': reason})
+                        to_close.append(pidx)
+                
+                pos_7d = [p for idx, p in enumerate(pos_7d) if idx not in to_close]
+                
+                # Process entries
+                if prob >= ENTRY_THRESHOLD_7D and i < len(prices_7d) - HORIZON_7D:
+                    exp = sum(p['pf'] for p in pos_7d)
+                    mexp = 1.5
+                    
+                    if exp < mexp:
+                        edge = prob - ENTRY_THRESHOLD_7D
+                        medge = 1.0 - ENTRY_THRESHOLD_7D if ENTRY_THRESHOLD_7D < 1.0 else 0.5
+                        norm = edge / medge if medge > 0 else 0.4
+                        pf = MIN_POS_7D + (MAX_POS_7D - MIN_POS_7D) * (norm ** 1.3)
+                        pf = np.clip(pf, MIN_POS_7D, MAX_POS_7D)
+                        pf *= (1.0 - exp / mexp * 0.3)
+                        pf = max(pf, MIN_POS_7D * 0.5)
+                        pv = cap_7d * pf
+                        
+                        pos_7d.append({'ei': i, 'ep': price, 'pv': pv, 'pf': pf, 'pb': prob, 'mp': price})
+                        logs_7d.append(f"🟢 ENTRY #{len(pos_7d)} | {tm.strftime('%Y-%m-%d %H:%M:%S')} | ₹{price:,.2f} | Conf: {prob*100:.1f}% | Size: {pf*100:.0f}%")
+                
+                for p in pos_7d:
+                    p['mp'] = max(p['mp'], price)
+                
+                equity_7d.append(cap_7d)
+            
+            # Close remaining
+            for p in pos_7d:
+                xp = prices_7d[-1]
+                ret = (xp - p['ep']) / p['ep']
+                nret = ret - (COST_PER_TRADE * 2)
+                pnl = p['pv'] * nret
+                cap_7d += pnl
+                peak_7d = max(peak_7d, cap_7d)
+                trades_7d.append({'ep': p['ep'], 'xp': xp, 'ret': nret, 'pnl': pnl, 'rsn': 'CLOSE'})
+            
+            # Results
+            logs_7d.append("")
+            logs_7d.append("=" * 80)
+            logs_result = "\n".join(logs_7d)
+            st.code(logs_result, language="text")
+            
+            ret_7d = (cap_7d / INITIAL_CAPITAL) - 1
+            wins = sum(1 for t in trades_7d if t['pnl'] > 0)
+            loss = len(trades_7d) - wins
+            
+            sum_7d = []
+            sum_7d.append("=" * 80)
+            sum_7d.append("📊 LIVE PAPER TRADING RESULTS (LAST 7 DAYS)")
+            sum_7d.append("=" * 80)
+            sum_7d.append(f"\n CAPITAL SUMMARY:")
+            sum_7d.append(f"   Initial: ₹{INITIAL_CAPITAL:,.0f}")
+            sum_7d.append(f"   Final: ₹{cap_7d:,.0f}")
+            sum_7d.append(f"   Peak: ₹{peak_7d:,.0f}")
+            sum_7d.append(f"   Net P&L: ₹{cap_7d - INITIAL_CAPITAL:+,.0f}")
+            sum_7d.append(f"\n PERFORMANCE:")
+            sum_7d.append(f"   Return: {ret_7d*100:+.2f}%")
+            
+            eq_arr = np.array(equity_7d)
+            mdd = ((eq_arr / np.maximum.accumulate(eq_arr)) - 1).min()
+            sum_7d.append(f"   Max DD: {mdd*100:.2f}%")
+            
+            rets = np.diff(eq_arr) / eq_arr[:-1]
+            rets = rets[rets != 0]
+            if len(rets) > 0 and rets.std() > 0:
+                sharpe = (rets.mean() / rets.std()) * np.sqrt(252 * 6.5 * 60)
+            else:
+                sharpe = 0
+            sum_7d.append(f"   Sharpe: {sharpe:.2f}")
+            
+            sum_7d.append(f"\n TRADING STATS:")
+            sum_7d.append(f"   Total: {len(trades_7d)} trades")
+            if len(trades_7d) > 0:
+                sum_7d.append(f"   Wins: {wins} ({wins/len(trades_7d)*100:.1f}%)")
+                sum_7d.append(f"   Loss: {loss} ({loss/len(trades_7d)*100:.1f}%)")
+            
+            sum_7d.append(f"\n EXIT BREAKDOWN:")
+            reasons = {}
+            for t in trades_7d:
+                r = t['rsn']
+                reasons[r] = reasons.get(r, 0) + 1
+            for r in sorted(reasons.keys()):
+                c = reasons[r]
+                sum_7d.append(f"   {r:15} : {c:3} trades ({c/len(trades_7d)*100:5.1f}%)" if trades_7d else f"   {r:15} : {c:3} trades")
+            
+            sum_7d.append("=" * 80)
+            
+            if ret_7d > 0.10:
+                verd = f" EXCELLENT! +{ret_7d*100:.2f}% return in 7 days!"
+            elif ret_7d > 0.05:
+                verd = f" VERY GOOD! +{ret_7d*100:.2f}% return in 7 days"
+            elif ret_7d > 0:
+                verd = f" PROFITABLE! +{ret_7d*100:.2f}% return in 7 days"
+            elif ret_7d < 0:
+                verd = f"  LOSS: {ret_7d*100:.2f}% on {len(trades_7d)} trades"
+            else:
+                verd = " NEUTRAL. 0.00% in 7 days"
+            
+            sum_7d.append(verd)
+            sum_7d.append("=" * 80)
+            
+            st.code("\n".join(sum_7d), language="text")
 
 # --------------------------------------------------
 # TAB 5: Real-Time Market Trading (9:15 AM - 3:15 PM IST)
