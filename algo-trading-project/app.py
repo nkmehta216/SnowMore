@@ -127,6 +127,43 @@ st.markdown("""
 # Helper Functions
 # --------------------------------------------------
 
+@st.cache_data(ttl=30)  # Cache for 30 seconds only (2x per minute) to get fresh data
+def get_latest_price(ticker):
+    """Fetch the latest current price for a ticker from yfinance"""
+    try:
+        IST = pytz.timezone("Asia/Kolkata")
+        
+        # Map ticker names to yfinance symbols
+        ticker_map = {
+            "NIFTY BANK": "^NSEBANK",
+            "NIFTY": "^NSEI",
+            "NIFTY COMMODITIES": "NIFTYCOMMDX.NS",
+            "NIFTY CONSUMPTION": "NIFTYCONSUMER.NS",
+            "NIFTY FIN SERVICE": "NIFTYFINANCE.NS",
+            "NIFTY INDIA MFG": "NIFTYMFG.NS",
+            "INDIA VIX": "^INDIAVIX"
+        }
+        
+        yf_ticker = ticker_map.get(ticker, ticker)
+        
+        # Fetch latest data - 1d is sufficient to get the latest price
+        data = yf.download(
+            yf_ticker,
+            period="1d",
+            progress=False,
+            timeout=10
+        )
+        
+        if data.empty:
+            return None
+        
+        # Get the latest close price
+        latest_price = data['Close'].iloc[-1]
+        return float(latest_price)
+        
+    except Exception as e:
+        return None
+
 # --------------------------------------------------
 # Helper Functions - Combined Strategy
 # --------------------------------------------------
@@ -142,7 +179,7 @@ def load_data(ticker):
         return None
 
 def fetch_today_realtime_data(ticker, days=1):
-    """Fetch today's real-time intraday data from yfinance"""
+    """Fetch today's real-time intraday data from yfinance with improved reliability"""
     try:
         IST = pytz.timezone("Asia/Kolkata")
         
@@ -163,13 +200,37 @@ def fetch_today_realtime_data(ticker, days=1):
         end_date = datetime.now(IST)
         start_date = end_date - timedelta(days=days)
         
-        live_data = yf.download(
-            yf_ticker,
-            start=start_date,
-            end=end_date,
-            interval="1m",
-            progress=False
-        )
+        # Try 1-minute interval first
+        try:
+            live_data = yf.download(
+                yf_ticker,
+                start=start_date,
+                end=end_date,
+                interval="1m",
+                progress=False,
+                timeout=10
+            )
+        except Exception as intraday_error:
+            # Fallback to 5-minute interval if 1-minute fails
+            try:
+                live_data = yf.download(
+                    yf_ticker,
+                    start=start_date,
+                    end=end_date,
+                    interval="5m",
+                    progress=False,
+                    timeout=10
+                )
+            except Exception as five_min_error:
+                # Final fallback to hourly data + latest daily candle
+                live_data = yf.download(
+                    yf_ticker,
+                    start=start_date,
+                    end=end_date,
+                    interval="1h",
+                    progress=False,
+                    timeout=10
+                )
         
         if live_data.empty:
             return None
@@ -188,10 +249,36 @@ def fetch_today_realtime_data(ticker, days=1):
         live_data.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
         live_data = live_data[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
         
+        # Ensure we have current data
+        if len(live_data) > 0:
+            last_time = live_data.index[-1]
+            time_diff = (datetime.now(IST) - last_time.replace(tzinfo=IST)).total_seconds() / 60
+            # If last data point is more than 30 minutes old, add current day's OHLC
+            if time_diff > 30:
+                try:
+                    today_data = yf.download(
+                        yf_ticker,
+                        start=end_date.date(),
+                        end=end_date + timedelta(days=1),
+                        interval="1d",
+                        progress=False,
+                        timeout=10
+                    )
+                    if not today_data.empty:
+                        today_data.index = pd.to_datetime(today_data.index).tz_localize("UTC").tz_convert(IST)
+                        if isinstance(today_data.columns, pd.MultiIndex):
+                            today_data.columns = [col[0] for col in today_data.columns]
+                        today_data.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                        # Use the latest daily candle if it's more recent
+                        if today_data.index[-1] > live_data.index[-1]:
+                            live_data = pd.concat([live_data, today_data[[col for col in today_data.columns if col in live_data.columns]]])
+                except:
+                    pass
+        
         return live_data
         
     except Exception as e:
-        st.warning(f"Could not fetch real-time data for {ticker}: {e}")
+        st.error(f"Error fetching real-time data for {ticker}: {e}")
         return None
 
 def add_scalping_signals(data):
@@ -404,11 +491,12 @@ with st.sidebar:
 # Main Tabs with Enhanced Styling
 # --------------------------------------------------
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📈 Overview", 
     "🤖 ML Predictions", 
     "📊 Live Trading", 
-    "📅 Daily Simulation"
+    "📅 Daily Simulation",
+    "🔴 Real-Time Market (9:15 AM - 3:15 PM)"
 ])
 
 st.divider()
@@ -499,45 +587,64 @@ atr_values = test_df["atr"].values
 # --------------------------------------------------
 # FETCH TODAY'S REAL-TIME DATA FOR OVERVIEW
 # --------------------------------------------------
-with st.spinner("Fetching today's real-time market data..."):
-    today_realtime_data = fetch_today_realtime_data(selected_ticker, days=1)
-    
-    if today_realtime_data is not None and len(today_realtime_data) > 50:
-        # Process real-time data with features
-        today_with_signals = add_scalping_signals(today_realtime_data.copy())
-        today_with_basic = add_basic_features(today_with_signals.copy())
-        today_with_advanced = add_advanced_features(today_with_basic.copy())
-        today_with_advanced = today_with_advanced.dropna()
+# Force update real-time data every page refresh (no caching)
+today_realtime_data = fetch_today_realtime_data(selected_ticker, days=3)  # Fetch 3 days for robustness
+
+is_realtime = False
+use_fallback = False
+
+if today_realtime_data is not None and len(today_realtime_data) > 0:
+    try:
+        # Filter to today's data only
+        IST = pytz.timezone("Asia/Kolkata")
+        today_start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_data = today_realtime_data[today_realtime_data.index.date == today_start.date()].copy()
         
-        if len(today_with_advanced) > 0:
-            # Get ML probabilities for today's data
-            X_today = today_with_advanced[strategy_data['feature_cols']].copy()
-            X_today_scaled = strategy_data['scaler'].transform(X_today)
-            today_ml_proba = get_ensemble_probability(
-                strategy_data['xgb_model'],
-                strategy_data['lgb_model'],
-                X_today_scaled
-            )
-            
-            # Use today's data for Overview
-            today_df = today_with_advanced.copy()
-            today_df['ml_prob'] = today_ml_proba
-            overview_prices = today_df["Close"].values
-            overview_atr_values = today_df["atr"].values
-            overview_df = today_df
-            is_realtime = True
+        # If we don't have enough today's data, include yesterday's data for feature calculation
+        if len(today_data) < 20 and len(today_realtime_data) >= 20:
+            today_data = today_realtime_data.tail(max(20, len(today_data))).copy()
+        
+        if len(today_data) >= 5:
+            # Process real-time data with features
+            with st.spinner("Processing real-time market data with ML features..."):
+                today_with_signals = add_scalping_signals(today_data.copy())
+                today_with_basic = add_basic_features(today_with_signals.copy())
+                today_with_advanced = add_advanced_features(today_with_basic.copy())
+                today_with_advanced = today_with_advanced.dropna()
+                
+                if len(today_with_advanced) > 0:
+                    # Get ML probabilities for today's data
+                    X_today = today_with_advanced[strategy_data['feature_cols']].copy()
+                    X_today_scaled = strategy_data['scaler'].transform(X_today)
+                    today_ml_proba = get_ensemble_probability(
+                        strategy_data['xgb_model'],
+                        strategy_data['lgb_model'],
+                        X_today_scaled
+                    )
+                    
+                    # Use today's data for Overview
+                    today_df = today_with_advanced.copy()
+                    today_df['ml_prob'] = today_ml_proba
+                    overview_prices = today_df["Close"].values
+                    overview_atr_values = today_df["atr"].values
+                    overview_df = today_df
+                    is_realtime = True
         else:
-            # Fallback to backtest data if today's data is too small
-            overview_prices = prices
-            overview_atr_values = atr_values
-            overview_df = test_df
-            is_realtime = False
-    else:
-        # Fallback to backtest data if can't fetch real-time
-        overview_prices = prices
-        overview_atr_values = atr_values
-        overview_df = test_df
-        is_realtime = False
+            # Not enough data for today
+            use_fallback = True
+    except Exception as e:
+        st.error(f"Error processing real-time data: {e}")
+        use_fallback = True
+else:
+    # Could not fetch real-time data
+    use_fallback = True
+
+# Fallback to backtest data only if real-time data couldn't be processed
+if use_fallback:
+    overview_prices = prices
+    overview_atr_values = atr_values
+    overview_df = test_df
+    is_realtime = False
 
 # --------------------------------------------------
 # TAB 1: Overview
@@ -547,15 +654,20 @@ with tab1:
     st.markdown("<h2 style='color: #667eea;'>📈 Market Overview & Strategy Status</h2>", unsafe_allow_html=True)
     
     if is_realtime:
-        st.success("✅ Real-time Data Active (Today)")
+        st.success("✅ Real-time Data Active - Fresh market data from today")
     else:
-        st.warning("⏱️ Using historical backtest data (2024)")
+        st.error("❌ FALLBACK MODE - Using historical backtest data (2024) - Real-time data unavailable. Please check market hours or try refreshing.")
     
     st.header(f"Strategy Overview - {selected_ticker}")
     
     col1, col2, col3, col4, col5 = st.columns(5)
     
-    latest_price = overview_prices[-1]
+    # Get the latest price - prioritize fresh real-time price
+    latest_price = get_latest_price(selected_ticker)
+    if latest_price is None:
+        # Fallback to overview data if real-time fetch fails
+        latest_price = overview_prices[-1]
+    
     latest_ml_prob = overview_df['ml_prob'].iloc[-1]
     latest_rsi = overview_df['RSI'].iloc[-1]
     latest_signal = overview_df['strategy_signal'].iloc[-1]
@@ -566,23 +678,23 @@ with tab1:
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        price_change = ((overview_prices[-1] - overview_prices[-20])/overview_prices[-20]*100) if len(overview_prices) > 20 else 0
-        st.metric("💰 Price", f"₹{latest_price:,.2f}", f"{price_change:+.2f}%", delta_color="normal")
+        price_change = ((latest_price - overview_prices[-20])/overview_prices[-20]*100) if len(overview_prices) > 20 else 0
+        st.metric("💰 Price", f"₹{latest_price:,.2f}")
     
     with col2:
-        st.metric("🤖 ML Conf", f"{latest_ml_prob*100:.1f}%", "Strong" if latest_ml_prob > 0.6 else "Weak")
+        st.metric("🤖 ML Conf", f"{latest_ml_prob*100:.1f}%")
     
     with col3:
         rsi_val = latest_rsi*100
         rsi_status = "Overbought" if rsi_val > 70 else "Oversold" if rsi_val < 30 else "Neutral"
-        st.metric("📈 RSI", f"{rsi_val:.1f}", rsi_status)
+        st.metric("📈 RSI", f"{rsi_val:.1f}")
     
     with col4:
         signal_text = "🟢 BUY" if latest_signal == 1 else "🔴 SELL" if latest_signal == -1 else "⚪ NEUTRAL"
         st.metric("📍 Signal", signal_text)
     
     with col5:
-        st.metric("⚡ ATR %", f"{latest_atr_pct*100:.3f}%", "High Vol" if latest_atr_pct > 0.015 else "Low Vol")
+        st.metric("⚡ ATR %", f"{latest_atr_pct*100:.3f}%")
     
     st.divider()
     
@@ -687,13 +799,41 @@ with tab2:
 
 with tab3:
     st.markdown("<h2 style='color: #667eea;'>📊 Live Paper Trading Dashboard</h2>", unsafe_allow_html=True)
+    
+    # Critical data freshness indicator
+    if is_realtime:
+        st.success("✅ LIVE TRADING MODE - Real-time data is active and fresh")
+    else:
+        st.error("❌ FALLBACK MODE - Using historical 2024 backtest data. Real-time market data not available. Refresh the page to retry.", icon="🚨")
+    
     st.info("🔴 Real-time simulation with ML ensemble predictions and dynamic risk management", icon="ℹ️")
+    
+    # Data source indicator
+    col_source1, col_source2, col_source3 = st.columns(3)
+    with col_source1:
+        is_live_status = "✅ LIVE" if is_realtime else "⏱️ HISTORICAL"
+        st.metric("Data Source", is_live_status)
+    
+    with col_source2:
+        if len(overview_df) > 0:
+            last_candle_time = overview_df.index[-1]
+            IST = pytz.timezone("Asia/Kolkata")
+            if last_candle_time.tzinfo is None:
+                last_candle_time = IST.localize(last_candle_time)
+            time_diff = datetime.now(IST) - last_candle_time.replace(tzinfo=IST)
+            minutes_ago = int(time_diff.total_seconds() / 60)
+            st.metric("Latest Candle Age", f"{minutes_ago} min ago")
+    
+    with col_source3:
+        st.metric("Total Candles", f"{len(overview_df):,}")
+    
+    st.divider()
     
     # Recent signals
     st.subheader("📈 Recent Trading Signals (Last 20 Candles)")
     
     recent_df = pd.DataFrame({
-        'Index': range(len(overview_prices[-20:]))[-20:],
+        'Time': overview_df.index[-20:],
         'Price': overview_prices[-20:],
         'ML Prob': overview_df['ml_prob'].iloc[-20:].values,
         'RSI': overview_df['RSI'].iloc[-20:].values * 100,
@@ -701,6 +841,8 @@ with tab3:
         'Signal': overview_df['strategy_signal'].iloc[-20:].values
     })
     
+    # Format the Time column to show readable timestamps
+    recent_df['Time'] = recent_df['Time'].dt.strftime('%Y-%m-%d %H:%M:%S')
     recent_df['Signal'] = recent_df['Signal'].map({1: '🟢 BUY', -1: '🔴 SELL', 0: '⚪ NEUTRAL'})
     recent_df = recent_df.round(4)
     
@@ -724,6 +866,71 @@ with tab3:
     
     with col_status3:
         st.metric("📉 Data Points", f"{len(overview_df):,} candles")
+    
+    st.divider()
+    
+    # Detailed Data Verification
+    with st.expander("🔍 Data Verification & Debug Info"):
+        col_debug1, col_debug2 = st.columns(2)
+        
+        with col_debug1:
+            st.subheader("Latest Candle Details")
+            if len(overview_df) > 0:
+                last_candle = overview_df.iloc[-1]
+                last_time = overview_df.index[-1]
+                
+                debug_info = f"""
+                **Time:** {last_time}
+                **Close Price:** ₹{last_candle['Close']:,.2f}
+                **High:** ₹{last_candle['High']:,.2f}
+                **Low:** ₹{last_candle['Low']:,.2f}
+                **Open:** ₹{last_candle['Open']:,.2f}
+                **Volume:** {last_candle['Volume']:,.0f}
+                **ML Probability:** {last_candle['ml_prob']*100:.2f}%
+                **RSI:** {last_candle['RSI']*100:.2f}
+                **ATR:** {last_candle['atr']:.2f}
+                """
+                st.markdown(debug_info)
+        
+        with col_debug2:
+            st.subheader("Data Source Information")
+            source_info = f"""
+            **Data Type:** {'Real-time' if is_realtime else 'Historical Backtest'}
+            **Total Candles in Dataset:** {len(overview_df):,}
+            **Date Range:** {overview_df.index[0]} to {overview_df.index[-1]}
+            **Days Covered:** {(overview_df.index[-1] - overview_df.index[0]).days} days
+            **Ticker:** {selected_ticker}
+            **Strategy Signal:** {'🟢 BUY' if overview_df['strategy_signal'].iloc[-1] == 1 else '🔴 SELL' if overview_df['strategy_signal'].iloc[-1] == -1 else '⚪ NEUTRAL'}
+            """
+            st.markdown(source_info)
+    
+    st.divider()
+    
+    # Candlestick chart for last 20 candles
+    st.subheader("📊 Last 20 Candles - Candlestick Chart")
+    
+    chart_data = overview_df.iloc[-20:].copy()
+    chart_data['Index'] = range(len(chart_data))
+    
+    fig = go.Figure(data=[go.Candlestick(
+        x=chart_data['Index'],
+        open=chart_data['Open'],
+        high=chart_data['High'],
+        low=chart_data['Low'],
+        close=chart_data['Close'],
+        name='OHLC'
+    )])
+    
+    fig.update_layout(
+        title=f"Last 20 Candles - {selected_ticker}",
+        yaxis_title='Price (₹)',
+        xaxis_title='Candle Index',
+        template='plotly_dark',
+        height=500,
+        hovermode='x unified'
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
 
 with tab4:
     st.markdown("<h2 style='color: #667eea;'>📅 Daily Live Simulation</h2>", unsafe_allow_html=True)
@@ -1034,6 +1241,424 @@ with tab4:
             
             summary_text = "\n".join(sim_logs_summary)
             st.markdown(f"```\n{summary_text}\n```")
+
+# --------------------------------------------------
+# TAB 5: Real-Time Market Trading (9:15 AM - 3:15 PM IST)
+# --------------------------------------------------
+
+with tab5:
+    st.markdown("<h2 style='color: #667eea;'>🔴 Real-Time Live Market Trading (9:15 AM - 3:15 PM IST)</h2>", unsafe_allow_html=True)
+    st.info("🔴 Live paper trading synchronized with NSE market hours. Fetches real-time data every minute.", icon="⏰")
+    
+    # IST timezone
+    IST = pytz.timezone("Asia/Kolkata")
+    now_ist = datetime.now(IST)
+    market_start = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+    market_end = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+    
+    # Check if market is open
+    is_market_open = market_start <= now_ist <= market_end and now_ist.weekday() < 5  # Mon-Fri
+    
+    col_market_status1, col_market_status2, col_market_status3 = st.columns(3)
+    
+    with col_market_status1:
+        status_indicator = "🟢 OPEN" if is_market_open else "🔴 CLOSED"
+        st.metric("Market Status", status_indicator)
+    
+    with col_market_status2:
+        st.metric("Current Time (IST)", now_ist.strftime("%H:%M:%S"))
+    
+    with col_market_status3:
+        if is_market_open:
+            time_remaining = market_end - now_ist
+            minutes_left = int(time_remaining.total_seconds() / 60)
+            st.metric("Time Left", f"{minutes_left} min")
+        else:
+            st.metric("Next Open", market_start.strftime("%H:%M"))
+    
+    st.divider()
+    
+    # Real-time trading configuration
+    st.subheader("⚙️ Real-Time Trading Configuration")
+    
+    col_config1, col_config2 = st.columns(2)
+    
+    with col_config1:
+        st.markdown("**Entry Configuration**")
+        rt_entry_quantile = st.slider("Entry Threshold (Percentile)", 40, 90, 70, key="rt_entry_q")
+        rt_min_confidence = st.slider("Minimum ML Confidence", 0.50, 0.75, 0.55, 0.01, key="rt_min_conf")
+    
+    with col_config2:
+        st.markdown("**Exit Configuration**")
+        rt_stop_loss = st.slider("Stop Loss %", 0.5, 3.0, 1.0, 0.1, key="rt_stop") / 100
+        rt_take_profit = st.slider("Take Profit %", 0.2, 3.0, 0.8, 0.1, key="rt_tp") / 100
+        rt_trail_stop = st.slider("Trailing Stop %", 0.1, 1.0, 0.2, 0.05, key="rt_trail") / 100
+    
+    col_config3, col_config4 = st.columns(2)
+    
+    with col_config3:
+        st.markdown("**Position Sizing**")
+        rt_min_position = st.slider("Min Position Size %", 1, 20, 5, key="rt_min_pos") / 100
+        rt_max_position = st.slider("Max Position Size %", 10, 50, 15, key="rt_max_pos") / 100
+    
+    with col_config4:
+        st.markdown("**Time Management**")
+        rt_holding_period = st.slider("Holding Period (bars)", 5, 60, 15, key="rt_hold")
+        rt_max_positions = st.slider("Max Open Positions", 1, 5, 3, key="rt_max_open")
+    
+    st.divider()
+    
+    # Start real-time simulation button
+    if st.button("▶️ START REAL-TIME TRADING SIMULATION", key="start_rt_trading"):
+        
+        if not is_market_open:
+            st.warning(f"⏰ Market is currently CLOSED. Trading resumes at {market_start.strftime('%H:%M IST')} on weekdays.")
+            st.info("You can still run a simulation with historical data.")
+        
+        with st.spinner("🔄 Initializing real-time trading engine..."):
+            
+            # Fetch initial data
+            try:
+                end_date = datetime.now(IST)
+                start_date = end_date - timedelta(hours=6)  # Last 6 hours of data
+                
+                try:
+                    rt_data = yf.download(
+                        "^NSEBANK",
+                        start=start_date,
+                        end=end_date,
+                        interval="1m",
+                        progress=False
+                    )
+                    rt_ticker = "^NSEBANK"
+                except:
+                    rt_data = yf.download(
+                        "NIFTYBANK.NS",
+                        start=start_date,
+                        end=end_date,
+                        interval="1m",
+                        progress=False
+                    )
+                    rt_ticker = "NIFTYBANK.NS"
+                
+                # Convert timezone
+                if rt_data.index.tz is None:
+                    rt_data.index = rt_data.index.tz_localize("UTC").tz_convert(IST)
+                else:
+                    rt_data.index = rt_data.index.tz_convert(IST)
+                
+                # Fix columns
+                if isinstance(rt_data.columns, pd.MultiIndex):
+                    rt_data.columns = [col[0] for col in rt_data.columns]
+                
+                rt_data.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                rt_data = rt_data[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+                
+                if len(rt_data) < 50:
+                    st.warning("⚠️ Not enough data available. Please try again when market has more activity.")
+                    st.stop()
+                
+                st.success(f"✅ Fetched {len(rt_data)} candles from real-time data")
+                
+            except Exception as e:
+                st.error(f"❌ Error fetching real-time data: {e}")
+                st.stop()
+        
+        # Apply features
+        with st.spinner("🔄 Processing features..."):
+            try:
+                rt_with_signals = add_scalping_signals(rt_data.copy())
+                rt_with_features = add_basic_features(rt_with_signals.copy())
+                rt_features = add_advanced_features(rt_with_features.copy())
+                rt_features = rt_features.dropna()
+                
+                X_rt = rt_features[strategy_data['feature_cols']].copy()
+                X_rt_scaled = strategy_data['scaler'].transform(X_rt)
+                ml_prob_rt = get_ensemble_probability(
+                    strategy_data['xgb_model'],
+                    strategy_data['lgb_model'],
+                    X_rt_scaled
+                )
+                
+                rt_prices = rt_features["Close"].values
+                rt_atr = rt_features["atr"].values
+                
+                st.success(f"✅ Features processed: {len(strategy_data['feature_cols'])} features")
+                
+            except Exception as e:
+                st.error(f"❌ Error in feature pipeline: {e}")
+                st.stop()
+        
+        # Real-time trading simulation
+        with st.spinner("🔄 Running real-time trading simulation..."):
+            
+            RT_ENTRY_THRESHOLD = np.percentile(ml_prob_rt, rt_entry_quantile)
+            RT_STOP_LOSS = rt_stop_loss
+            RT_TAKE_PROFIT = rt_take_profit
+            RT_TRAIL_STOP = rt_trail_stop
+            RT_HOLDING_PERIOD = rt_holding_period
+            RT_MIN_POS = rt_min_position
+            RT_MAX_POS = rt_max_position
+            RT_MAX_OPEN = rt_max_positions
+            
+            rt_capital = INITIAL_CAPITAL
+            rt_peak_capital = rt_capital
+            rt_positions = []
+            rt_trades = []
+            rt_equity_curve = [rt_capital]
+            rt_logs = []
+            
+            # Simulation header
+            rt_logs.append("=" * 90)
+            rt_logs.append(f" REAL-TIME LIVE TRADING SIMULATION - {now_ist.strftime('%Y-%m-%d %H:%M:%S IST')}")
+            rt_logs.append("=" * 90)
+            rt_logs.append(f"\n✅ Data Summary:")
+            rt_logs.append(f"   Candles: {len(rt_data)} (1-minute)")
+            rt_logs.append(f"   Time Range: {rt_data.index[0]} → {rt_data.index[-1]}")
+            rt_logs.append(f"   Price Range: ₹{rt_data['Low'].min():.2f} - ₹{rt_data['High'].max():.2f}")
+            rt_logs.append(f"\n⚙️  Configuration:")
+            rt_logs.append(f"   Entry Threshold: {RT_ENTRY_THRESHOLD:.4f} ({rt_entry_quantile}th percentile)")
+            rt_logs.append(f"   Stop Loss: {RT_STOP_LOSS*100:.2f}%")
+            rt_logs.append(f"   Take Profit: {RT_TAKE_PROFIT*100:.2f}%")
+            rt_logs.append(f"   Trailing Stop: {RT_TRAIL_STOP*100:.3f}%")
+            rt_logs.append(f"   Holding Period: {RT_HOLDING_PERIOD} bars")
+            rt_logs.append(f"   Max Open Positions: {RT_MAX_OPEN}")
+            rt_logs.append("")
+            rt_logs.append(" 🟢 TRADES LOG:")
+            rt_logs.append("-" * 90)
+            
+            # Main trading loop
+            for i in range(len(rt_prices)):
+                current_price = rt_prices[i]
+                current_time = rt_features.index[i]
+                current_ml_prob = ml_prob_rt[i]
+                current_atr = rt_atr[i]
+                
+                # Warmup period
+                if i < 20:
+                    rt_equity_curve.append(rt_capital)
+                    continue
+                
+                # Process existing positions
+                positions_to_close = []
+                
+                for pos_idx, pos in enumerate(rt_positions):
+                    price_move = (current_price - pos['entry_price']) / pos['entry_price']
+                    vol_adj_stop = RT_STOP_LOSS * (1 + (current_atr / current_price) * 0.5)
+                    vol_adj_stop = np.clip(vol_adj_stop, RT_STOP_LOSS * 0.8, RT_STOP_LOSS * 1.2)
+                    
+                    exit_hit = False
+                    exit_reason = None
+                    exit_price = current_price
+                    
+                    # Check profit targets
+                    if price_move >= RT_TAKE_PROFIT:
+                        exit_hit = True
+                        exit_reason = "PROFIT_TARGET"
+                        exit_price = pos['entry_price'] * (1 + RT_TAKE_PROFIT)
+                    
+                    # Trailing stop after partial profit
+                    elif price_move > RT_TAKE_PROFIT * 0.5 and current_price < pos['max_price'] * (1 - RT_TRAIL_STOP):
+                        exit_hit = True
+                        exit_reason = "TRAILING_STOP"
+                        exit_price = pos['max_price'] * (1 - RT_TRAIL_STOP)
+                    
+                    # Stop loss
+                    elif price_move <= -vol_adj_stop:
+                        exit_hit = True
+                        exit_reason = "STOP_LOSS"
+                        exit_price = current_price
+                    
+                    # Time-based exit
+                    elif i - pos['entry_idx'] >= RT_HOLDING_PERIOD:
+                        exit_hit = True
+                        exit_reason = "TIME_EXIT"
+                        exit_price = current_price
+                    
+                    if exit_hit:
+                        ret = (exit_price - pos['entry_price']) / pos['entry_price']
+                        net_ret = ret - (COST_PER_TRADE * 2)
+                        pnl = pos['position_value'] * net_ret
+                        
+                        rt_capital += pnl
+                        rt_peak_capital = max(rt_peak_capital, rt_capital)
+                        
+                        emoji = "🎯" if pnl > 0 else "🛑"
+                        pnl_str = f"+₹{pnl:,.0f}" if pnl > 0 else f"-₹{abs(pnl):,.0f}"
+                        ret_str = f"+{net_ret*100:.2f}%" if net_ret > 0 else f"{net_ret*100:.2f}%"
+                        
+                        rt_logs.append(f"{emoji} EXIT | {current_time.strftime('%H:%M:%S')} | ₹{exit_price:,.2f} | P&L: {pnl_str} ({ret_str}) | [{exit_reason}] | Capital: ₹{rt_capital:,.0f}")
+                        
+                        rt_trades.append({
+                            'entry_price': pos['entry_price'],
+                            'exit_price': exit_price,
+                            'prob': pos['ml_prob'],
+                            'return': net_ret,
+                            'pnl': pnl,
+                            'reason': exit_reason,
+                            'duration': i - pos['entry_idx']
+                        })
+                        
+                        positions_to_close.append(pos_idx)
+                
+                rt_positions = [pos for idx, pos in enumerate(rt_positions) if idx not in positions_to_close]
+                
+                # Entry logic
+                if current_ml_prob >= RT_ENTRY_THRESHOLD and current_ml_prob >= rt_min_confidence:
+                    if i < len(rt_prices) - RT_HOLDING_PERIOD:
+                        if len(rt_positions) < RT_MAX_OPEN:
+                            total_exposure = sum(p['position_fraction'] for p in rt_positions)
+                            
+                            if total_exposure < (RT_MAX_OPEN * RT_MAX_POS):
+                                conf_edge = current_ml_prob - RT_ENTRY_THRESHOLD
+                                max_edge = 1.0 - RT_ENTRY_THRESHOLD
+                                normalized = conf_edge / max_edge if max_edge > 0 else 0.4
+                                
+                                pos_frac = RT_MIN_POS + (RT_MAX_POS - RT_MIN_POS) * (normalized ** 1.3)
+                                pos_frac = np.clip(pos_frac, RT_MIN_POS, RT_MAX_POS)
+                                pos_frac *= (1.0 - total_exposure / (RT_MAX_OPEN * RT_MAX_POS) * 0.3)
+                                pos_frac = max(pos_frac, RT_MIN_POS * 0.5)
+                                
+                                pos_value = rt_capital * pos_frac
+                                
+                                rt_positions.append({
+                                    'entry_idx': i,
+                                    'entry_price': current_price,
+                                    'position_value': pos_value,
+                                    'position_fraction': pos_frac,
+                                    'ml_prob': current_ml_prob,
+                                    'max_price': current_price
+                                })
+                                
+                                prob_pct = current_ml_prob * 100
+                                size_pct = pos_frac * 100
+                                rt_logs.append(f"🟢 ENTRY #{len(rt_positions)} | {current_time.strftime('%H:%M:%S')} | ₹{current_price:,.2f} | Conf: {prob_pct:.1f}% | Size: {size_pct:.0f}% | Capital: ₹{rt_capital:,.0f}")
+                
+                # Update max prices for trailing stops
+                for pos in rt_positions:
+                    pos['max_price'] = max(pos['max_price'], current_price)
+                
+                rt_equity_curve.append(rt_capital)
+            
+            # Close remaining positions at session end
+            for pos in rt_positions:
+                exit_price = rt_prices[-1]
+                ret = (exit_price - pos['entry_price']) / pos['entry_price']
+                net_ret = ret - (COST_PER_TRADE * 2)
+                pnl = pos['position_value'] * net_ret
+                
+                rt_capital += pnl
+                rt_peak_capital = max(rt_peak_capital, rt_capital)
+                
+                rt_trades.append({
+                    'entry_price': pos['entry_price'],
+                    'exit_price': exit_price,
+                    'prob': pos['ml_prob'],
+                    'return': net_ret,
+                    'pnl': pnl,
+                    'reason': 'SESSION_END',
+                    'duration': 0
+                })
+            
+            rt_logs.append("-" * 90)
+            rt_logs.append("")
+            
+            # Results summary
+            rt_return = (rt_capital / INITIAL_CAPITAL) - 1
+            rt_equity_arr = np.array(rt_equity_curve)
+            rt_max_dd = ((rt_equity_arr / np.maximum.accumulate(rt_equity_arr)) - 1).min()
+            
+            rt_winning = sum(1 for t in rt_trades if t['pnl'] > 0)
+            rt_losing = len(rt_trades) - rt_winning
+            
+            rt_logs.append(" 📊 FINAL RESULTS:")
+            rt_logs.append("-" * 90)
+            rt_logs.append(f"   Starting Capital:   ₹{INITIAL_CAPITAL:,.0f}")
+            rt_logs.append(f"   Ending Capital:     ₹{rt_capital:,.0f}")
+            rt_logs.append(f"   Peak Capital:       ₹{rt_peak_capital:,.0f}")
+            rt_logs.append(f"   Net P&L:            ₹{rt_capital - INITIAL_CAPITAL:+,.0f}")
+            rt_logs.append("")
+            rt_logs.append(f"   Return:             {rt_return*100:+.3f}%")
+            rt_logs.append(f"   Max Drawdown:       {rt_max_dd*100:.2f}%")
+            rt_logs.append(f"   Total Trades:       {len(rt_trades)}")
+            rt_logs.append(f"   Winners:            {rt_winning} ({rt_winning/max(len(rt_trades),1)*100:.1f}%)")
+            rt_logs.append(f"   Losers:             {rt_losing} ({rt_losing/max(len(rt_trades),1)*100:.1f}%)")
+            
+            if len(rt_trades) > 0:
+                gross_profit = sum(t['pnl'] for t in rt_trades if t['pnl'] > 0)
+                gross_loss = abs(sum(t['pnl'] for t in rt_trades if t['pnl'] < 0))
+                avg_win = gross_profit / rt_winning if rt_winning > 0 else 0
+                avg_loss = gross_loss / rt_losing if rt_losing > 0 else 0
+                pf = gross_profit / gross_loss if gross_loss > 0 else (np.inf if gross_profit > 0 else 0)
+                
+                rt_logs.append(f"   Profit Factor:      {pf:.2f}" if pf != np.inf else f"   Profit Factor:      ∞")
+                rt_logs.append(f"   Avg Win:            ₹{avg_win:,.0f}")
+                rt_logs.append(f"   Avg Loss:           ₹{avg_loss:,.0f}")
+            
+            rt_logs.append("=" * 90)
+            
+            # Display logs
+            logs_text = "\n".join(rt_logs)
+            st.markdown(f"```\n{logs_text}\n```")
+            
+            # Summary cards
+            col_summary1, col_summary2, col_summary3, col_summary4 = st.columns(4)
+            
+            with col_summary1:
+                st.metric("Final Capital", f"₹{rt_capital:,.0f}", f"{rt_return*100:+.2f}%")
+            
+            with col_summary2:
+                st.metric("Max Drawdown", f"{rt_max_dd*100:.2f}%", "Risk Managed" if rt_max_dd > -0.10 else "High Risk")
+            
+            with col_summary3:
+                st.metric("Win Rate", f"{rt_winning/max(len(rt_trades),1)*100:.1f}%", f"{len(rt_trades)} trades")
+            
+            with col_summary4:
+                if len(rt_trades) > 0:
+                    gross_profit = sum(t['pnl'] for t in rt_trades if t['pnl'] > 0)
+                    gross_loss = abs(sum(t['pnl'] for t in rt_trades if t['pnl'] < 0))
+                    pf = gross_profit / gross_loss if gross_loss > 0 else np.inf
+                    st.metric("Profit Factor", f"{pf:.2f}", "Strong" if pf > 1.5 else "Weak" if pf < 1.0 else "Neutral")
+                else:
+                    st.metric("Profit Factor", "N/A", "No trades")
+            
+            st.divider()
+            
+            # Trades breakdown
+            if rt_trades:
+                st.subheader("📋 Detailed Trade Breakdown")
+                trades_df = pd.DataFrame(rt_trades)
+                trades_df['Entry'] = trades_df['entry_price'].apply(lambda x: f"₹{x:.2f}")
+                trades_df['Exit'] = trades_df['exit_price'].apply(lambda x: f"₹{x:.2f}")
+                trades_df['Confidence'] = trades_df['prob'].apply(lambda x: f"{x*100:.1f}%")
+                trades_df['Return'] = trades_df['return'].apply(lambda x: f"{x*100:+.2f}%")
+                trades_df['P&L'] = trades_df['pnl'].apply(lambda x: f"₹{x:,.0f}" if x >= 0 else f"-₹{abs(x):,.0f}")
+                trades_df['Bars'] = trades_df['duration']
+                
+                display_trades = trades_df[['Entry', 'Exit', 'Confidence', 'Return', 'P&L', 'reason', 'Bars']]
+                display_trades.columns = ['Entry Price', 'Exit Price', 'ML Conf', 'Return %', 'P&L', 'Exit Reason', 'Bars Held']
+                
+                st.dataframe(display_trades, use_container_width=True, hide_index=True)
+            
+            # Equity curve
+            fig_equity = go.Figure()
+            fig_equity.add_trace(go.Scatter(
+                x=np.arange(len(rt_equity_curve)),
+                y=rt_equity_curve,
+                mode='lines',
+                name='Capital',
+                line=dict(color='#667eea', width=2),
+                fill='tozeroy',
+                fillcolor='rgba(102, 126, 234, 0.1)'
+            ))
+            fig_equity.update_layout(
+                title='Capital Evolution During Real-Time Trading',
+                xaxis_title='Candle Index',
+                yaxis_title='Capital (₹)',
+                hovermode='x unified',
+                height=400
+            )
+            st.plotly_chart(fig_equity, use_container_width=True)
 
 st.divider()
 st.markdown("""
