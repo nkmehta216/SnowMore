@@ -196,9 +196,50 @@ def fetch_today_realtime_data(ticker, days=1):
         
         yf_ticker = ticker_map.get(ticker, ticker)
         
+        # Get current time in IST
+        now_ist = datetime.now(IST)
+        
+        # Check if today is a holiday or weekend, and if so, find the last trading day
+        current_day = now_ist.weekday()  # 0=Monday, 6=Sunday
+        
+        # Indian stock market holidays (sample list - add known holidays)
+        indian_holidays = {
+            (1, 26),   # Republic Day
+            (3, 8),    # Maha Shivaratri (varies, but placeholder)
+            (3, 29),   # Good Friday
+            (4, 17),   # Ram Navami (varies)
+            (4, 21),   # Mahavir Jayanti
+            (5, 23),   # Buddha Purnima (varies)
+            (8, 15),   # Independence Day
+            (8, 27),   # Janmashtami (varies)
+            (9, 16),   # Milad-un-Nabi (varies)
+            (10, 2),   # Gandhi Jayanti
+            (10, 12),  # Dussehra (varies)
+            (10, 31),  # Diwali (varies, usually Oct-Nov)
+            (11, 1),   # Diwali (varies)
+            (11, 15),  # Guru Nanak Jayanti
+            (12, 25),  # Christmas
+        }
+        
+        target_date = now_ist
+        days_back = 0
+        max_lookback = 7  # Don't look back more than 7 days
+        
+        # Keep going back until we find a trading day (weekday and not a holiday)
+        while days_back < max_lookback:
+            if target_date.weekday() < 5:  # Monday=0 to Friday=4
+                # Check if it's a known holiday
+                date_tuple = (target_date.month, target_date.day)
+                if date_tuple not in indian_holidays:
+                    # This should be a trading day
+                    break
+            # Go back one day
+            target_date = target_date - timedelta(days=1)
+            days_back += 1
+        
         # Fetch last N days of 1-minute data
-        end_date = datetime.now(IST)
-        start_date = end_date - timedelta(days=days)
+        end_date = target_date + timedelta(days=1)
+        start_date = target_date - timedelta(days=days)
         
         # Try 1-minute interval first
         try:
@@ -595,12 +636,12 @@ use_fallback = False
 
 if today_realtime_data is not None and len(today_realtime_data) > 0:
     try:
-        # Filter to today's data only
+        # Use the last trading day's data (which could be today, Friday, or earlier if holidays)
         IST = pytz.timezone("Asia/Kolkata")
-        today_start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
-        today_data = today_realtime_data[today_realtime_data.index.date == today_start.date()].copy()
+        last_trading_date = today_realtime_data.index.max().date()
+        today_data = today_realtime_data[today_realtime_data.index.date == last_trading_date].copy()
         
-        # If we don't have enough today's data, include yesterday's data for feature calculation
+        # If we don't have enough data for the last trading day, include previous days for feature calculation
         if len(today_data) < 20 and len(today_realtime_data) >= 20:
             today_data = today_realtime_data.tail(max(20, len(today_data))).copy()
         
